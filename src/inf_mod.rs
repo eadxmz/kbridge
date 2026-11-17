@@ -49,7 +49,7 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
         }
     }
 
-    // PASS 2: Surgically prune missing files inside [SourceDisksFiles*] and CopyFiles sections
+    // PASS 2: Surgically prune missing files, strip ExcludeFromSelect, and unlock NTamd64.10.0
     let mut out_lines: Vec<String> = Vec::new();
     let mut win7_device_lines: Vec<String> = Vec::new();
     let mut current_section = String::new();
@@ -62,8 +62,15 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
         let trimmed = line.trim();
         let lower = trimmed.to_lowercase();
 
+        // Point CatalogFile= to our freshly built igdlh.cat
         if lower.starts_with("catalogfile") {
             out_lines.push("CatalogFile=igdlh.cat".to_string());
+            continue;
+        }
+
+        // CRITICAL: Remove ExcludeFromSelect so Device Manager "Have Disk" / "Let me pick" displays the driver
+        if lower.starts_with("excludefromselect") {
+            out_lines.push(format!("; {}", line));
             continue;
         }
 
@@ -136,8 +143,13 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
             }
         }
 
-        if lower.starts_with("%intel%") && lower.contains("ntamd64.6.1") && !lower.contains("ntamd64.10.0") {
-            out_lines.push(format!("{}, NTamd64.10.0", line));
+        // Safely append NTamd64.10.0 to [Manufacturer] before any inline ';' comment
+        if current_section == "manufacturer" && lower.contains("intelgfx") && !lower.contains("ntamd64.10.0") {
+            if let Some((code_part, comment_part)) = line.split_once(';') {
+                out_lines.push(format!("{}, NTamd64.10.0 ;{}", code_part.trim_end(), comment_part));
+            } else {
+                out_lines.push(format!("{}, NTamd64.10.0", line));
+            }
             continue;
         }
 
@@ -157,7 +169,7 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
 
     fs::write(inf_path, out_lines.join("\r\n"))?;
     println!(
-        "[+] Patched igdlh64.inf: added [IntelGfx.NTamd64.10.0], baked 11 DWORDs, and pruned {} stripped file references.",
+        "[+] Patched igdlh64.inf: added [IntelGfx.NTamd64.10.0], cleared ExcludeFromSelect, baked 11 DWORDs, pruned {} refs.",
         pruned_count
     );
     Ok(())

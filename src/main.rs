@@ -76,10 +76,10 @@ fn run_driver_workflow(install_now: bool) -> Result<()> {
     println!("\n[*] Scanning package, stripping bloatware & keeping core WDDM files...");
     let pkg = patcher::strip_driver_package(&input_dir, &out_dir, keep_ui)?;
 
-    println!("[*] Unlocking Windows 10/11 target, pruning stripped CopyFiles entries & baking 11 DWORDs...");
+    println!("[*] Unlocking Windows 10/11 target, removing ExcludeFromSelect & baking 11 DWORDs...");
     inf_mod::patch_inf_for_win10_11(&pkg.inf_path, &out_dir, keep_ui)?;
 
-    println!("[*] Preserving original WHQL signature on igdkmd64.sys (No Test Mode required)...");
+    println!("[*] Signing catalog & binding driver onto Intel HD Graphics...");
     signer::sign_and_install_driver(&out_dir, pkg.orig_whql_cat.as_deref(), false, install_now)?;
 
     color::disable_windows_color_conflicts();

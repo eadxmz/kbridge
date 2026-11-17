@@ -4,6 +4,8 @@ use std::fs;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::process::Command;
+use winreg::enums::*;
+use winreg::RegKey;
 
 #[repr(C)]
 struct Guid {
@@ -20,16 +22,17 @@ const DRIVER_ACTION_VERIFY: Guid = Guid {
     data4: [0x85, 0xE5, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE],
 };
 
-// DIIRFLAG_FORCE_INF = 0x00000002 (Forces Windows to bind this INF onto matching hardware even if same/newer version exists)
-const DIIRFLAG_FORCE_INF: u32 = 0x0000_0002;
+// INSTALLFLAG_FORCE = 0x00000001 (Forces driver installation on matching Hardware ID)
+const INSTALLFLAG_FORCE: u32 = 0x0000_0001;
 
 #[link(name = "newdev")]
 extern "system" {
-    fn DiInstallDriverW(
+    fn UpdateDriverForPlugAndPlayDevicesW(
         hwndParent: *mut c_void,
-        InfPath: *const u16,
-        Flags: u32,
-        NeedReboot: *mut i32,
+        HardwareId: *const u16,
+        FullInfPath: *const u16,
+        InstallFlags: u32,
+        bRebootRequired: *mut i32,
     ) -> i32;
 }
 
@@ -282,13 +285,74 @@ pub fn generate_cat_natively(driver_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Removes any stale `oem*.inf` packages in DriverStore from earlier failed attempts so `pnputil` stages fresh.
+fn purge_stale_oem_packages() {
+    if let Ok(out) = Command::new("pnputil").args(["/enum-drivers"]).output() {
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut current_oem: Option<String> = None;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if let Some((_, val)) = trimmed.split_once(':') {
+                let v = val.trim();
+                if v.to_lowercase().starts_with("oem") && v.to_lowercase().ends_with(".inf") {
+                    current_oem = Some(v.to_string());
+                } else if let Some(ref oem) = current_oem {
+                    let low = v.to_lowercase();
+                    if low == "igdlh64.inf" || low == "kit51428.inf" || low == "kit51681.inf" {
+                        println!("[*] Removing stale DriverStore package {} ({})...", oem, v);
+                        let _ = Command::new("pnputil")
+                            .args(["/delete-driver", oem, "/uninstall", "/force"])
+                            .status();
+                        current_oem = None;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Detects the active Intel PCI display adapter Hardware IDs (e.g., `PCI\VEN_8086&DEV_0046&SUBSYS_392017AA&REV_02`).
+fn detect_intel_gpu_hardware_ids() -> Vec<String> {
+    let mut hw_ids = Vec::new();
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    if let Ok(pci_enum) = hklm.open_subkey(r"SYSTEM\CurrentControlSet\Enum\PCI") {
+        for dev_id in pci_enum.enum_keys().flatten() {
+            let low = dev_id.to_lowercase();
+            if low.starts_with("ven_8086&dev_004") || low.starts_with("ven_8086&dev_01") {
+                if let Ok(dev_key) = pci_enum.open_subkey(&dev_id) {
+                    for inst_id in dev_key.enum_keys().flatten() {
+                        if let Ok(inst_key) = dev_key.open_subkey(&inst_id) {
+                            let class: String = inst_key.get_value("Class").unwrap_or_default();
+                            if class.eq_ignore_ascii_case("Display") {
+                                if let Ok(ids) = inst_key.get_value::<Vec<String>, _>("HardwareID") {
+                                    hw_ids.extend(ids);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if hw_ids.is_empty() {
+        hw_ids.push(r"PCI\VEN_8086&DEV_0046".to_string());
+        hw_ids.push(r"PCI\VEN_8086&DEV_0042".to_string());
+    }
+    hw_ids
+}
+
 fn print_recent_setupapi_errors() {
     let log_path = Path::new(r"C:\Windows\INF\setupapi.dev.log");
     if let Ok(content) = fs::read_to_string(log_path) {
-        let lines: Vec<&str> = content.lines().rev().take(35).collect();
+        let lines: Vec<&str> = content.lines().rev().take(40).collect();
         println!("[!] Recent SetupAPI log details:");
         for l in lines.into_iter().rev() {
-            if l.contains("!!!") || l.contains("flq:") || l.contains("inf:") || l.contains("sto:") {
+            if l.contains("!!!")
+                || l.contains("ndv:")
+                || l.contains("dvi:")
+                || l.contains("flq:")
+                || l.contains("sto:")
+            {
                 println!("    {}", l.trim());
             }
         }
@@ -358,45 +422,54 @@ pub fn sign_and_install_driver(
     }
 
     if install_now {
+        purge_stale_oem_packages();
+
         let inf_path = abs_dir.join("igdlh64.inf");
         let clean_inf = inf_path
             .to_string_lossy()
             .trim_start_matches(r"\\?\")
             .to_string();
-        println!("[*] Staging signed driver package into Windows DriverStore via pnputil...");
-        let pnp_status = Command::new("pnputil")
-            .args(["/add-driver", &clean_inf, "/install"])
+
+        println!("[*] Staging fresh signed driver package into Windows DriverStore...");
+        let _ = Command::new("pnputil")
+            .args(["/add-driver", &clean_inf])
             .status()?;
 
-        let code = pnp_status.code().unwrap_or(-1);
-        // Exit code 0 = installed; Exit code 259 (ERROR_NO_MORE_ITEMS) = staged into DriverStore,
-        // but device already has same/newer driver version so PnP skipped auto-overwriting.
-        if code != 0 && code != 259 && code != 3010 {
-            print_recent_setupapi_errors();
-            anyhow::bail!("pnputil failed to stage the driver package (exit code: {}).", code);
+        let hw_ids = detect_intel_gpu_hardware_ids();
+        let inf_wide = to_wide(&clean_inf);
+        let mut bound = false;
+        let mut need_reboot: i32 = 0;
+
+        for hwid in &hw_ids {
+            println!("[*] Force-binding patched driver onto Hardware ID: {} ...", hwid);
+            let hwid_wide = to_wide(hwid);
+            let ok = unsafe {
+                UpdateDriverForPlugAndPlayDevicesW(
+                    std::ptr::null_mut(),
+                    hwid_wide.as_ptr(),
+                    inf_wide.as_ptr(),
+                    INSTALLFLAG_FORCE,
+                    &mut need_reboot,
+                )
+            };
+            if ok != 0 {
+                bound = true;
+                println!("[+] Successfully installed & bound Intel(R) HD Graphics driver via {}!", hwid);
+                break;
+            }
         }
 
-        println!("[*] Force-binding patched igdlh64.inf onto Intel HD Graphics device (DiInstallDriverW)...");
-        let inf_wide = to_wide(&clean_inf);
-        let mut need_reboot: i32 = 0;
-        let di_ok = unsafe {
-            DiInstallDriverW(
-                std::ptr::null_mut(),
-                inf_wide.as_ptr(),
-                DIIRFLAG_FORCE_INF,
-                &mut need_reboot,
-            )
-        };
-
-        if di_ok != 0 {
-            println!("[+] Successfully bound patched driver onto Intel HD Graphics!");
+        if bound {
             if need_reboot != 0 {
-                println!("[!] Windows requires a system restart to activate the newly installed driver.");
+                println!("[!] Windows requires a system restart to finish activating the new display driver.");
             }
         } else {
+            let last_err = std::io::Error::last_os_error();
+            println!("[!] Direct PnP bind returned OS error: {}", last_err);
             print_recent_setupapi_errors();
-            println!("[!] Automatic force-bind returned a warning. You can finish binding in 10 seconds via:");
-            println!("    Device Manager -> Display adapters -> Update driver -> Browse my computer -> Let me pick -> Have Disk -> {}", clean_inf);
+            println!("\n[i] ExcludeFromSelect has now been cleared from igdlh64.inf, so you can also finish in 10 seconds via:");
+            println!("    Device Manager -> Display adapters -> Microsoft Basic Display Adapter -> Update driver");
+            println!("    -> Browse my computer -> Let me pick -> Have Disk -> {}", clean_inf);
         }
     }
     Ok(())

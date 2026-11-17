@@ -34,9 +34,9 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.3.4-latest
+          tag_name: v0.3.5-latest
           name: "KBridge Latest Build (kbridge.exe)"
-          body: "Interactive menu-driven Windows x64 release build of `kbridge.exe` with DiInstallDriverW (DIIRFLAG_FORCE_INF) active device binding, unquoted WinTrust CDF hash generation, two-pass INF pruning, and Normal-Mode driver signing."
+          body: "Interactive menu-driven Windows x64 release build of `kbridge.exe` that strips ExcludeFromSelect (fixes Device Manager Have Disk compatibility dialog), purges stale oem*.inf entries, and force-binds the patched driver via UpdateDriverForPlugAndPlayDevicesW."
           prerelease: false
           files: |
             target/release/kbridge.exe
