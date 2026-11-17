@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -25,24 +26,57 @@ const BLOAT_FILE_PREFIXES: &[&str] = &[
     "intcdaud",
     "igfxdo",
     "opencl",
+    "igfxcm",
+    "gfxres.",
+    "igfxr",
 ];
 
-pub fn patch_inf_for_win10_11(inf_path: &Path, keep_ui: bool) -> Result<()> {
+pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) -> Result<()> {
     let raw = fs::read_to_string(inf_path)?;
+
+    let mut existing_files: HashSet<String> = HashSet::new();
+    if let Ok(entries) = fs::read_dir(out_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                existing_files.insert(name.to_lowercase());
+            }
+        }
+    }
+
     let mut out_lines: Vec<String> = Vec::new();
     let mut win7_device_lines: Vec<String> = Vec::new();
     let mut in_win7_section = false;
+    let mut in_source_disks_files = false;
     let mut injected_dwords = false;
 
     for line in raw.lines() {
         let trimmed = line.trim();
         let lower = trimmed.to_lowercase();
 
-        if BLOAT_FILE_PREFIXES.iter().any(|p| lower.starts_with(p)) {
+        if lower.starts_with("catalogfile") {
+            out_lines.push("CatalogFile=igdlh.cat".to_string());
             continue;
         }
-        if !keep_ui && (lower.starts_with("gfxui.exe") || lower.starts_with("igfxr")) {
+
+        if trimmed.starts_with('[') {
+            in_source_disks_files = lower.starts_with("[sourcedisksfiles");
+        }
+
+        if !keep_ui && (lower.starts_with("gfxui.exe") || lower.starts_with("igfxrenu.lrc")) {
             continue;
+        }
+        if BLOAT_FILE_PREFIXES.iter().any(|p| lower.starts_with(p)) {
+            if !(keep_ui && lower.starts_with("igfxrenu.lrc")) {
+                continue;
+            }
+        }
+        if in_source_disks_files && !trimmed.starts_with('[') && !trimmed.starts_with(';') && !trimmed.is_empty() {
+            if let Some((lhs, _)) = trimmed.split_once('=') {
+                let fname = lhs.trim().to_lowercase();
+                if !existing_files.contains(&fname) {
+                    continue;
+                }
+            }
         }
 
         if lower.contains("cui.copy") || lower.contains("cuir.copy") || lower.contains("hotkey.copy") {
@@ -50,6 +84,10 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, keep_ui: bool) -> Result<()> {
                 out_lines.push(format!("; {}", line));
                 continue;
             }
+        }
+        if lower.contains("opencl.copy") || lower.contains("audio.copy") || lower.contains("hdmi.copy") {
+            out_lines.push(format!("; {}", line));
+            continue;
         }
 
         if lower.starts_with("%intel%") && lower.contains("ntamd64.6.1") && !lower.contains("ntamd64.10.0") {

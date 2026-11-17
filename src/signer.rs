@@ -13,7 +13,6 @@ struct Guid {
     data4: [u8; 8],
 }
 
-// DRIVER_ACTION_VERIFY = {F750E6C3-38EE-11D1-85E5-00C04FC295EE}
 const DRIVER_ACTION_VERIFY: Guid = Guid {
     data1: 0xF750E6C3,
     data2: 0x38EE,

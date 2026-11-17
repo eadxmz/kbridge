@@ -133,8 +133,8 @@ pub fn boost_foreground_process(physical_core_mask: usize) {
 }
 
 pub fn run_daemon_loop(fallback_color: ColorConfig) {
-    println!("[*] KBridge Daemon Active (0.5ms Timer + Color LUT Guard + Standby Purger)...");
-    println!("[*] Keep this window open or minimized (or use Option [7] to run automatically at login).");
+    println!("[*] KBridge Background Guard Active (Color LUT Lock + 0.5ms Timer + Standby RAM Purger)...");
+    println!("[*] You can minimize this window. It will start silently in the background on future reboots.");
     lock_kernel_timer_05ms(true);
 
     let mut last_hwnd: isize = 0;

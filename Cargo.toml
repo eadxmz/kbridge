@@ -1,6 +1,6 @@
 [package]
 name = "kbridge"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Intel HD Graphics (15.22.58.2993) Win10/11 Interactive Patcher & Low-Overhead Daemon"
 build = "build.rs"

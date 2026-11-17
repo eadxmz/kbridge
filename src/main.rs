@@ -26,7 +26,12 @@ fn pause() {
 }
 
 fn resolve_driver_input_path() -> Option<PathBuf> {
-    let default_candidates = [r".\win64_152258", r"C:\win64_152258"];
+    let default_candidates = [
+        r".\win7vista_64_152258",
+        r".\win64_152258",
+        r"C:\win7vista_64_152258",
+        r"C:\win64_152258",
+    ];
     for cand in &default_candidates {
         if Path::new(cand).exists() {
             let ans = prompt(&format!(
@@ -68,17 +73,22 @@ fn run_driver_workflow(install_now: bool) -> Result<()> {
     let ui_ans = prompt("Keep Intel Control Panel UI (GfxUI.exe - 0 MB idle RAM)? [Y/n]: ");
     let keep_ui = ui_ans.is_empty() || ui_ans.eq_ignore_ascii_case("y");
 
-    println!("\n[*] Stripping bloatware & keeping core WDDM files...");
-    let orig_whql_cat = patcher::strip_driver_package(&input_dir, &out_dir, keep_ui)?;
+    println!("\n[*] Scanning package, stripping bloatware & keeping core WDDM files...");
+    let pkg = patcher::strip_driver_package(&input_dir, &out_dir, keep_ui)?;
 
     println!("[*] Unlocking Windows 10/11 target & baking 11 performance DWORDs into INF...");
-    inf_mod::patch_inf_for_win10_11(&out_dir.join("igdlh64.inf"), keep_ui)?;
+    inf_mod::patch_inf_for_win10_11(&pkg.inf_path, &out_dir, keep_ui)?;
 
     println!("[*] Preserving original WHQL signature on igdkmd64.sys (No Test Mode required)...");
-    signer::sign_and_install_driver(&out_dir, orig_whql_cat.as_deref(), false, install_now)?;
+    signer::sign_and_install_driver(&out_dir, pkg.orig_whql_cat.as_deref(), false, install_now)?;
 
     color::disable_windows_color_conflicts();
-    println!("\n[✓] Driver processing complete!");
+    println!("\n[✓] Driver processing complete! Output saved to: {}", out_dir.display());
+    if !install_now {
+        println!("[i] Next: Run Option [1] to install directly, or install via Device Manager -> Have Disk.");
+    } else {
+        println!("[i] Next: Reboot if prompted, then run Option [3] to apply OS tweaks & startup Color Guard.");
+    }
     Ok(())
 }
 
@@ -121,14 +131,16 @@ fn run_display_preset_menu() {
 }
 
 fn setup_and_run_daemon(register_startup: bool) -> Result<()> {
-    let g_str = prompt("Desired Gamma [default: 1.10]: ");
+    println!("\n--- Color Persistence & Performance Daemon Setup ---");
+    println!("[i] If you adjust colors in Intel Control Panel (GfxUI.exe), KBridge will lock them automatically.");
+    let g_str = prompt("Fallback Gamma if Intel Control Panel isn't used [default: 1.08]: ");
     let gamma: f32 = if g_str.is_empty() {
-        1.10
+        1.08
     } else {
-        g_str.parse().unwrap_or(1.10)
+        g_str.parse().unwrap_or(1.08)
     };
 
-    let c_str = prompt("Desired Contrast [default: 1.05]: ");
+    let c_str = prompt("Fallback Contrast [default: 1.05]: ");
     let contrast: f32 = if c_str.is_empty() {
         1.05
     } else {
@@ -157,7 +169,7 @@ fn setup_and_run_daemon(register_startup: bool) -> Result<()> {
             ])
             .status()?;
         if status.success() {
-            println!("[+] Registered KBridgeOptDaemon to run automatically at Windows Logon.");
+            println!("[+] Registered KBridgeOptDaemon to start silently at every Windows Logon.");
         }
     }
 
@@ -177,7 +189,7 @@ fn parse_background_daemon_args() -> Option<ColorConfig> {
         return None;
     }
     let mut cfg = ColorConfig {
-        gamma: 1.10,
+        gamma: 1.08,
         contrast: 1.05,
         ..Default::default()
     };
@@ -185,7 +197,7 @@ fn parse_background_daemon_args() -> Option<ColorConfig> {
     while i < args.len() {
         match args[i].as_str() {
             "--gamma" if i + 1 < args.len() => {
-                cfg.gamma = args[i + 1].parse().unwrap_or(1.10);
+                cfg.gamma = args[i + 1].parse().unwrap_or(1.08);
                 i += 1;
             }
             "--brightness" if i + 1 < args.len() => {
@@ -204,7 +216,6 @@ fn parse_background_daemon_args() -> Option<ColorConfig> {
 }
 
 fn main() -> Result<()> {
-    // Silent background launch when triggered by Windows Task Scheduler (`--daemon`)
     if let Some(bg_cfg) = parse_background_daemon_args() {
         color::disable_windows_color_conflicts();
         daemon::run_daemon_loop(bg_cfg);
@@ -215,18 +226,22 @@ fn main() -> Result<()> {
         println!("\n==================================================================");
         println!("  KBridge - Intel HD Graphics (15.22.58.2993) Win10/11 Optimizer");
         println!("==================================================================");
+        println!("  --- STEP 1: DRIVER PATCH & INSTALL ---");
         println!("  [1] Patch, Sign & Install Driver (Normal Mode - No Test Mode)");
-        println!("  [2] Patch & Sign Driver Only (Export to folder without installing)");
-        println!("  [3] Apply Windows 10/11 OS, MSI, FSE & Color Reset Fixes");
-        println!("  [4] Switch Live GPU Profile: OVERDRIVE (Max Clocks, RC6 Off)");
-        println!("  [5] Switch Live GPU Profile: ECO (Stock Clocks, Power Saving)");
-        println!("  [6] Quick Display Resolution & Gamma Preset");
-        println!("  [7] Register Daemon at Windows Startup & Start Now");
-        println!("  [8] Start Background Daemon Now (Current Session Only)");
+        println!("  [2] Patch & Sign Driver Only (Export folder without installing)");
+        println!();
+        println!("  --- STEP 2: RUN ONCE AFTER DRIVER INSTALL ---");
+        println!("  [3] Apply Win10/11 OS Tweaks + Enable Startup Color & RAM Guard");
+        println!();
+        println!("  --- OPTIONAL DAILY TOGGLES (USE ANYTIME) ---");
+        println!("  [4] GPU Mode: OVERDRIVE (Lock Max Clocks, RC6 Off - Best FPS)");
+        println!("  [5] GPU Mode: ECO (Stock Clocks, Power Saving - Cooler/Battery)");
+        println!("  [6] Change Display Resolution & Gamma Preset");
+        println!("  [7] Start Background Guard Now (This Session Only, No Startup)");
         println!("  [0] Exit");
         println!("==================================================================");
 
-        let choice = prompt("Select an option [0-8]: ");
+        let choice = prompt("Select an option [0-7]: ");
         let res: Result<()> = match choice.as_str() {
             "1" => run_driver_workflow(true),
             "2" => run_driver_workflow(false),
@@ -234,7 +249,7 @@ fn main() -> Result<()> {
                 color::disable_windows_color_conflicts();
                 os_tweaks::apply_live_gpu_registry_flags(true)?;
                 os_tweaks::apply_win10_11_os_tweaks()?;
-                Ok(())
+                setup_and_run_daemon(true)
             }
             "4" => {
                 daemon::switch_gpu_profile(true, &ColorConfig::default())?;
@@ -250,11 +265,10 @@ fn main() -> Result<()> {
                 run_display_preset_menu();
                 Ok(())
             }
-            "7" => setup_and_run_daemon(true),
-            "8" => setup_and_run_daemon(false),
+            "7" => setup_and_run_daemon(false),
             "0" => break,
             _ => {
-                println!("[!] Invalid option. Please enter a number between 0 and 8.");
+                println!("[!] Invalid option. Please enter a number between 0 and 7.");
                 Ok(())
             }
         };

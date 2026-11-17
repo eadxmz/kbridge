@@ -2,10 +2,6 @@
 
 Interactive menu-driven Rust driver patcher, INF modifier, native catalog generator, and low-overhead background optimization daemon for Intel HD Graphics (15.22.58.2993) on Windows 10 and Windows 11.
 
-## Features
-- **Zero-CLI Interactive Menu**: Double-click `kbridge.exe` (automatically requests Administrator privileges) and pick numbered options `[1]` through `[8]`—no command-line flags to memorize.
-- **No Test Mode Required (WHQL + CatRoot Dual-Catalog Signing)**: Preserves Intel's genuine Microsoft WHQL kernel signature on `igdkmd64.sys` by registering the original WHQL catalog in Windows `CatRoot`, while natively generating and Root-CA signing a new `igdlh.cat` via `wintrust.dll` for the modified `igdlh64.inf`. Installs and runs on Windows 10/11 in **Normal Boot** (no Test Mode watermark, no WDK/Inf2Cat required).
-- **Driver Package Stripping**: Strips `igfxpers.exe`, `hkcmd.exe`, `igfxsrvc.exe`, OpenCL, and DisplayAudio bloatware.
-- **Windows 10/11 INF Unlock & Hardcoded Flags**: Clones device descriptors into `[IntelGfx.NTamd64.10.0]` and bakes 11 power, clock, and GTT memory DWORDs directly into `[igfx_SoftwareDeviceSettings]`.
-- **Persistent Color & Gamma Guard**: Fixes the Intel Media Control Panel boot/fullscreen color reset bug on Windows 10/11 without relying on `igfxpers.exe`.
-- **Ultra-Lean Background Daemon**: Locks the Windows kernel timer to 0.5 ms, purges the Standby RAM list under 500 MB free memory, and pins foreground games to physical cores.
+## Quick Start (2 Steps)
+1. **Run `kbridge.exe` -> Option `[1]`**: Point it to your extracted `win7vista_64_152258` folder. It automatically detects `kit51681.inf` / `igdlh64.inf`, strips bloatware, unlocks Windows 10/11 support, bakes in the 11 performance DWORDs, signs a fresh catalog in Normal Mode (no Test Mode required), and installs the driver.
+2. **Run `kbridge.exe` -> Option `[3]`**: Applies the Windows 10/11 OS tweaks (MSI interrupts, Spectre/Meltdown mitigation bypass, Exclusive Fullscreen, DWM/SysMain cuts), disables Windows' conflicting Calibration Loader task, and registers the background Color LUT + 0.5 ms Timer + Standby RAM guard to run automatically at login.
