@@ -52,6 +52,21 @@ extern "system" {
 
     fn CryptCATCDFClose(pCDF: *mut c_void) -> i32;
 
+    fn CryptCATOpen(
+        pwszFileName: *const u16,
+        fdwOpenFlags: u32,
+        hProv: usize,
+        dwPublicVersion: u32,
+        dwEncodingType: u32,
+    ) -> isize;
+
+    fn CryptCATEnumerateMember(
+        hCatalog: isize,
+        pPrevMember: *mut c_void,
+    ) -> *mut c_void;
+
+    fn CryptCATClose(hCatalog: isize) -> i32;
+
     fn CryptCATAdminAcquireContext(
         phCatAdmin: *mut isize,
         pgSubsystem: *const Guid,
@@ -112,6 +127,30 @@ pub fn register_catalog_in_catroot(cat_path: &Path, base_name: &str) -> bool {
     }
 }
 
+fn count_catalog_members(cat_path: &Path) -> usize {
+    let clean_cat = cat_path
+        .to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .to_string();
+    let cat_wide = to_wide(&clean_cat);
+    let mut count = 0usize;
+    unsafe {
+        let h_cat = CryptCATOpen(cat_wide.as_ptr(), 0, 0, 0, 0);
+        if h_cat != -1 && h_cat != 0 {
+            let mut member: *mut c_void = std::ptr::null_mut();
+            loop {
+                member = CryptCATEnumerateMember(h_cat, member);
+                if member.is_null() {
+                    break;
+                }
+                count += 1;
+            }
+            CryptCATClose(h_cat);
+        }
+    }
+    count
+}
+
 pub fn generate_cat_natively(driver_dir: &Path) -> Result<()> {
     let abs_dir = driver_dir.canonicalize().unwrap_or_else(|_| driver_dir.to_path_buf());
     let clean_dir_str = abs_dir
@@ -137,7 +176,7 @@ pub fn generate_cat_natively(driver_dir: &Path) -> Result<()> {
         "[CatalogFiles]".to_string(),
     ];
 
-    let mut idx = 0;
+    let mut expected_files = 0usize;
     for entry in fs::read_dir(&abs_dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -151,12 +190,13 @@ pub fn generate_cat_natively(driver_dir: &Path) -> Result<()> {
                 .to_string_lossy()
                 .trim_start_matches(r"\\?\")
                 .to_string();
-            cdf_lines.push(format!("<HASH>member{}=\"{}\"", idx, file_clean));
+            // CRITICAL: CryptCATCDFOpen requires unquoted paths on the right-hand side
+            cdf_lines.push(format!("<HASH>{}={}", fname, file_clean));
             cdf_lines.push(format!(
-                "<HASH>member{}ATTR1=0x10010001:File:{}",
-                idx, fname
+                "<HASH>{}ATTR1=0x10010001:File:{}",
+                fname, fname
             ));
-            idx += 1;
+            expected_files += 1;
         }
     }
 
@@ -215,7 +255,18 @@ pub fn generate_cat_natively(driver_dir: &Path) -> Result<()> {
     }
 
     let _ = fs::remove_file(&cdf_path);
-    println!("[+] Built fresh Windows 10/11 security catalog (igdlh.cat) natively via WinTrust.");
+
+    let embedded_count = count_catalog_members(&cat_path);
+    if embedded_count == 0 {
+        anyhow::bail!(
+            "igdlh.cat was created with 0 file hashes (expected {}).",
+            expected_files
+        );
+    }
+    println!(
+        "[+] Built fresh Windows 10/11 security catalog (igdlh.cat) with {}/{} verified file hashes.",
+        embedded_count, expected_files
+    );
     Ok(())
 }
 

@@ -33,21 +33,27 @@ const OPTIONAL_UI_FILES: &[&str] = &[
     "igfxcpl.cpl",
 ];
 
-fn collect_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+fn find_display_inf(dir: &Path) -> Option<PathBuf> {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                let dname = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
-                if dname.contains("audio") || dname.contains("hdmi") || dname.contains("opencl") || dname == "lang" {
-                    continue;
+                if let Some(found) = find_display_inf(&path) {
+                    return Some(found);
                 }
-                collect_files_recursive(&path, out);
             } else if path.is_file() {
-                out.push(path);
+                let fname = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+                if fname.ends_with(".inf") && !fname.contains("intcdaud") && !fname.contains("autorun") {
+                    if let Ok(text) = fs::read_to_string(&path) {
+                        if text.contains("igdkmd64.sys") || text.contains("IntelGfx") {
+                            return Some(path);
+                        }
+                    }
+                }
             }
         }
     }
+    None
 }
 
 pub fn strip_driver_package(
@@ -60,24 +66,23 @@ pub fn strip_driver_package(
     }
     fs::create_dir_all(out_dir)?;
 
-    let mut all_files = Vec::new();
-    collect_files_recursive(src_dir, &mut all_files);
+    let src_inf = find_display_inf(src_dir).with_context(|| {
+        format!(
+            "Could not find an Intel Display .inf file (igdlh64.inf or kit*.inf) inside '{}'. Make sure you extracted the zip/exe first.",
+            src_dir.display()
+        )
+    })?;
 
-    let mut found_inf: Option<PathBuf> = None;
+    // Only scan the directory containing the Display INF (e.g., `Graphics\`) so unrelated sub-packages aren't mixed in
+    let graphics_dir = src_inf.parent().unwrap_or(src_dir);
 
-    for path in &all_files {
-        let fname = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
-
-        if fname.ends_with(".inf") && !fname.contains("intcdaud") && !fname.contains("autorun") {
-            if let Ok(text) = fs::read_to_string(path) {
-                if text.contains("igdkmd64.sys") || text.contains("IntelGfx") {
-                    found_inf = Some(path.clone());
-                }
-            }
+    for entry in fs::read_dir(graphics_dir)?.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
         }
-
+        let fname = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
         let is_coinstaller = fname.starts_with("igfxcoin") && fname.ends_with(".dll");
-        // Keep all firmware/media microcode blobs (.bin, .vp, .cpa) required by igdkmd64.sys / INF CopyFiles
         let is_microcode_blob = fname.ends_with(".bin") || fname.ends_with(".vp") || fname.ends_with(".cpa");
 
         let should_keep = CORE_WDDM_FILES.contains(&fname.as_str())
@@ -86,17 +91,10 @@ pub fn strip_driver_package(
             || (keep_ui && OPTIONAL_UI_FILES.contains(&fname.as_str()));
 
         if should_keep {
-            fs::copy(path, out_dir.join(path.file_name().unwrap()))?;
+            fs::copy(&path, out_dir.join(path.file_name().unwrap()))?;
             println!("[+] Kept core file: {}", fname);
         }
     }
-
-    let src_inf = found_inf.with_context(|| {
-        format!(
-            "Could not find an Intel Display .inf file (igdlh64.inf or kit*.inf) inside '{}'. Make sure you extracted the zip/exe first.",
-            src_dir.display()
-        )
-    })?;
 
     // Match the exact WHQL catalog file with the same stem as the INF (e.g. kit51428.inf -> kit51428.cat)
     let inf_stem = src_inf
@@ -105,11 +103,14 @@ pub fn strip_driver_package(
         .to_string_lossy()
         .to_lowercase();
     let mut found_cat: Option<PathBuf> = None;
-    for path in &all_files {
-        let fname = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
-        if fname == format!("{}.cat", inf_stem) || fname == "igdlh.cat" {
-            found_cat = Some(path.clone());
-            break;
+    for entry in fs::read_dir(graphics_dir)?.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            let fname = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+            if fname == format!("{}.cat", inf_stem) || fname == "igdlh.cat" {
+                found_cat = Some(path);
+                break;
+            }
         }
     }
 

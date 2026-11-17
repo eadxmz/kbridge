@@ -20,7 +20,6 @@ const HARDCODED_INF_DWORDS: &[(&str, u32)] = &[
 pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) -> Result<()> {
     let raw = fs::read_to_string(inf_path)?;
 
-    // Build exact set of lowercase filenames present in `out_dir`
     let mut existing_files: HashSet<String> = HashSet::new();
     if let Ok(entries) = fs::read_dir(out_dir) {
         for entry in entries.flatten() {
@@ -50,7 +49,7 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
         }
     }
 
-    // PASS 2: Surgically prune missing files ONLY inside [SourceDisksFiles*] and CopyFiles sections
+    // PASS 2: Surgically prune missing files inside [SourceDisksFiles*] and CopyFiles sections
     let mut out_lines: Vec<String> = Vec::new();
     let mut win7_device_lines: Vec<String> = Vec::new();
     let mut current_section = String::new();
@@ -63,13 +62,11 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
         let trimmed = line.trim();
         let lower = trimmed.to_lowercase();
 
-        // Point CatalogFile= to our freshly built igdlh.cat
         if lower.starts_with("catalogfile") {
             out_lines.push("CatalogFile=igdlh.cat".to_string());
             continue;
         }
 
-        // Track active [Section] header
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             if capturing_win7 && !emitted_nt10_section {
                 capturing_win7 = false;
@@ -88,7 +85,6 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
             continue;
         }
 
-        // Strip inline `CopyFiles=@filename` if the file was stripped from out_dir
         if lower.starts_with("copyfiles") && lower.contains('@') {
             if let Some((_, rhs)) = trimmed.split_once('=') {
                 let mut kept_items = Vec::new();
@@ -112,7 +108,6 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
             }
         }
 
-        // Prune missing files inside [SourceDisksFiles*] (`filename.ext = 1,,...`)
         let in_source_disks = current_section.starts_with("sourcedisksfiles");
         if in_source_disks && !trimmed.is_empty() && !trimmed.starts_with(';') {
             if let Some((lhs, _)) = trimmed.split_once('=') {
@@ -124,7 +119,6 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
             }
         }
 
-        // Prune missing files inside any CopyFiles section (`dest_file[,src_file][,unused][,flags]`)
         let in_copy_section = copy_sections.contains(&current_section);
         if in_copy_section && !trimmed.is_empty() && !trimmed.starts_with(';') {
             let parts: Vec<&str> = trimmed.split(',').collect();
@@ -142,7 +136,6 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
             }
         }
 
-        // Add NTamd64.10.0 to [Manufacturer] for Windows 10 & Windows 11
         if lower.starts_with("%intel%") && lower.contains("ntamd64.6.1") && !lower.contains("ntamd64.10.0") {
             out_lines.push(format!("{}, NTamd64.10.0", line));
             continue;
@@ -152,7 +145,6 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
             win7_device_lines.push(line.to_string());
         }
 
-        // Bake 11 Hardcoded Registry Flags into [igfx_SoftwareDeviceSettings]
         out_lines.push(line.to_string());
         if current_section == "igfx_softwaredevicesettings" && !injected_dwords {
             out_lines.push("; --- KBridge Hardcoded Performance & Memory Flags ---".to_string());
