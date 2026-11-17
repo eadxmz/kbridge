@@ -29,9 +29,6 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
         }
     }
 
-    // PASS 1: Collect every section name referenced by `CopyFiles=...` directives
-    // AND collect all PCI\VEN_8086 device model lines from ANY [IntelGfx.NTamd64*] section
-    // (In kit51428.inf, Intel puts all device IDs under [IntelGfx.NTamd64.6.0], NOT .6.1!)
     let mut copy_sections: HashSet<String> = HashSet::new();
     let mut captured_device_lines: Vec<String> = Vec::new();
     let mut seen_models: HashSet<String> = HashSet::new();
@@ -66,7 +63,6 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
         }
     }
 
-    // Fallback safety: if an OEM INF omitted generic Ironlake/Clarkdale IDs, ensure they exist
     if !captured_device_lines.iter().any(|l| l.to_lowercase().contains("dev_0046")) {
         captured_device_lines.push(r"%iILKGM0% = iILKM0, PCI\VEN_8086&DEV_0046".to_string());
     }
@@ -76,8 +72,6 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
 
     let model_count = captured_device_lines.len();
 
-    // PASS 2: Rewrite INF with CatalogFile, cleared ExcludeFromSelect, populated [IntelGfx.NTamd64.10.0],
-    // pruned CopyFiles/SourceDisksFiles, and the 11 hardcoded performance DWORDs.
     let mut out_lines: Vec<String> = Vec::new();
     let mut current_section = String::new();
     let mut emitted_nt10_section = false;
@@ -99,7 +93,6 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
         }
 
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            // Emit populated [IntelGfx.NTamd64.10.0] right before the first install section ([iILK...)
             if !emitted_nt10_section && current_section.starts_with("intelgfx.ntamd64") {
                 let next_sec = trimmed[1..trimmed.len() - 1].trim().to_lowercase();
                 if !next_sec.starts_with("intelgfx.ntamd64") {

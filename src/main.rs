@@ -87,7 +87,7 @@ fn run_driver_workflow(install_now: bool) -> Result<()> {
     if !install_now {
         println!("[i] Next: Run Option [1] to install directly, or install via Device Manager -> Have Disk.");
     } else {
-        println!("[i] Next: Reboot if prompted, then run Option [3] to apply OS tweaks & startup Color Guard.");
+        println!("[i] Next: Reboot if prompted, then run Option [3] to apply anti-stutter OS & daemon tweaks.");
     }
     Ok(())
 }
@@ -123,7 +123,7 @@ fn run_display_preset_menu() {
             contrast,
             ..Default::default()
         };
-        color::apply_gamma_ramp(&cfg);
+        color::apply_gamma_ramp_if_changed(&cfg);
         println!("[+] Applied {}x{} (Gamma {:.2}, Contrast {:.2}).", w, h, gamma, contrast);
     } else {
         println!("[!] Display mode {}x{} was rejected by the display adapter.", w, h);
@@ -131,8 +131,8 @@ fn run_display_preset_menu() {
 }
 
 fn setup_and_run_daemon(register_startup: bool) -> Result<()> {
-    println!("\n--- Color Persistence & Performance Daemon Setup ---");
-    println!("[i] If you adjust colors in Intel Control Panel (GfxUI.exe), KBridge will lock them automatically.");
+    println!("\n--- Anti-Stutter Color & Frame-Pacing Daemon Setup ---");
+    println!("[i] Event-driven WinEvent hook + conditional LUT guard (zero periodic stutter).");
     let g_str = prompt("Fallback Gamma if Intel Control Panel isn't used [default: 1.08]: ");
     let gamma: f32 = if g_str.is_empty() {
         1.08
@@ -224,14 +224,14 @@ fn main() -> Result<()> {
 
     loop {
         println!("\n==================================================================");
-        println!("  KBridge - Intel HD Graphics (15.22.58.2993) Win10/11 Optimizer");
+        println!("  KBridge v0.4.0 - Intel HD Graphics (15.22.58.2993) Optimizer");
         println!("==================================================================");
         println!("  --- STEP 1: DRIVER PATCH & INSTALL ---");
         println!("  [1] Patch, Sign & Install Driver (Normal Mode - No Test Mode)");
         println!("  [2] Patch & Sign Driver Only (Export folder without installing)");
         println!();
-        println!("  --- STEP 2: RUN ONCE AFTER DRIVER INSTALL ---");
-        println!("  [3] Apply Win10/11 OS Tweaks + Enable Startup Color & RAM Guard");
+        println!("  --- STEP 2: RUN ONCE AFTER DRIVER INSTALL (ANTI-STUTTER) ---");
+        println!("  [3] Apply Win10/11 Anti-Stutter OS Tweaks + Start Event Daemon");
         println!();
         println!("  --- OPTIONAL DAILY TOGGLES (USE ANYTIME) ---");
         println!("  [4] GPU Mode: OVERDRIVE (Lock Max Clocks, RC6 Off - Best FPS)");

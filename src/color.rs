@@ -1,11 +1,12 @@
 use std::ffi::c_void;
 use std::process::Command;
 use windows_sys::Win32::Graphics::Gdi::{GetDC, ReleaseDC, HDC};
-use windows_sys::Win32::UI::ColorSystem::SetDeviceGammaRamp;
+use windows_sys::Win32::UI::ColorSystem::{GetDeviceGammaRamp, SetDeviceGammaRamp};
 use winreg::enums::*;
 use winreg::RegKey;
 
 #[repr(C)]
+#[derive(PartialEq, Eq)]
 pub struct GammaRamp {
     pub red: [u16; 256],
     pub green: [u16; 256],
@@ -85,14 +86,26 @@ pub fn build_gamma_ramp(cfg: &ColorConfig) -> GammaRamp {
     ramp
 }
 
-pub fn apply_gamma_ramp(cfg: &ColorConfig) -> bool {
-    let ramp = build_gamma_ramp(cfg);
+/// Only pushes SetDeviceGammaRamp if the active hardware LUT differs from our target curve.
+/// Avoids periodic GDI pipeline stalls during 60fps video playback.
+pub fn apply_gamma_ramp_if_changed(cfg: &ColorConfig) -> bool {
+    let target = build_gamma_ramp(cfg);
     unsafe {
         let hdc: HDC = GetDC(std::ptr::null_mut());
         if hdc.is_null() {
             return false;
         }
-        let ok = SetDeviceGammaRamp(hdc, &ramp as *const _ as *const c_void) != 0;
+        let mut current = GammaRamp {
+            red: [0; 256],
+            green: [0; 256],
+            blue: [0; 256],
+        };
+        let got_cur = GetDeviceGammaRamp(hdc, &mut current as *mut _ as *mut c_void) != 0;
+        if got_cur && current == target {
+            ReleaseDC(std::ptr::null_mut(), hdc);
+            return true;
+        }
+        let ok = SetDeviceGammaRamp(hdc, &target as *const _ as *const c_void) != 0;
         ReleaseDC(std::ptr::null_mut(), hdc);
         ok
     }

@@ -22,7 +22,6 @@ const DRIVER_ACTION_VERIFY: Guid = Guid {
     data4: [0x85, 0xE5, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE],
 };
 
-// INSTALLFLAG_FORCE = 0x00000001
 const INSTALLFLAG_FORCE: u32 = 0x0000_0001;
 
 #[link(name = "newdev")]
