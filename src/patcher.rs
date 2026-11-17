@@ -19,12 +19,6 @@ const CORE_WDDM_FILES: &[&str] = &[
     "igdde32.dll",
     "igdumdx32.dll",
     "igfxress.dll",
-    "igcompkrng500.bin",
-    "igcompkrng575.bin",
-    "igcompkrng600.bin",
-    "igfcg500m.bin",
-    "igfcg575m.bin",
-    "igfcg600m.bin",
 ];
 
 const OPTIONAL_UI_FILES: &[&str] = &[
@@ -70,7 +64,6 @@ pub fn strip_driver_package(
     collect_files_recursive(src_dir, &mut all_files);
 
     let mut found_inf: Option<PathBuf> = None;
-    let mut found_cat: Option<PathBuf> = None;
 
     for path in &all_files {
         let fname = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
@@ -83,13 +76,13 @@ pub fn strip_driver_package(
             }
         }
 
-        if fname.ends_with(".cat") && !fname.contains("intcdaud") {
-            found_cat = Some(path.clone());
-        }
-
         let is_coinstaller = fname.starts_with("igfxcoin") && fname.ends_with(".dll");
+        // Keep all firmware/media microcode blobs (.bin, .vp, .cpa) required by igdkmd64.sys / INF CopyFiles
+        let is_microcode_blob = fname.ends_with(".bin") || fname.ends_with(".vp") || fname.ends_with(".cpa");
+
         let should_keep = CORE_WDDM_FILES.contains(&fname.as_str())
             || is_coinstaller
+            || is_microcode_blob
             || (keep_ui && OPTIONAL_UI_FILES.contains(&fname.as_str()));
 
         if should_keep {
@@ -105,6 +98,21 @@ pub fn strip_driver_package(
         )
     })?;
 
+    // Match the exact WHQL catalog file with the same stem as the INF (e.g. kit51428.inf -> kit51428.cat)
+    let inf_stem = src_inf
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    let mut found_cat: Option<PathBuf> = None;
+    for path in &all_files {
+        let fname = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+        if fname == format!("{}.cat", inf_stem) || fname == "igdlh.cat" {
+            found_cat = Some(path.clone());
+            break;
+        }
+    }
+
     let dst_inf = out_dir.join("igdlh64.inf");
     fs::copy(&src_inf, &dst_inf)?;
     println!(
@@ -114,7 +122,7 @@ pub fn strip_driver_package(
 
     if let Some(ref cat) = found_cat {
         println!(
-            "[+] Found original WHQL catalog: {}",
+            "[+] Matched original WHQL catalog: {}",
             cat.file_name().unwrap().to_string_lossy()
         );
     }

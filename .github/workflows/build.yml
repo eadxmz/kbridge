@@ -34,9 +34,9 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.3.1-latest
+          tag_name: v0.3.2-latest
           name: "KBridge Latest Build (kbridge.exe)"
-          body: "Interactive menu-driven Windows x64 release build of `kbridge.exe` with complete CopyFiles/SourceDisksFiles pruning (fixes ERROR_FILE_NOT_FOUND in pnputil/Device Manager), auto-INF detection, native WinTrust `.cat` generation, and WHQL-preserved Normal-Mode driver signing."
+          body: "Interactive menu-driven Windows x64 release build of `kbridge.exe` with .vp/.cpa firmware preservation, two-pass surgical INF CopyFiles/SourceDisksFiles pruning, auto-INF/CAT matching, native WinTrust `.cat` generation, and Normal-Mode driver signing."
           prerelease: false
           files: |
             target/release/kbridge.exe
