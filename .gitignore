@@ -1,0 +1,6 @@
+/target
+/patched_driver
+*.cat
+*.sys
+*.dll
+setup_kbridge.py

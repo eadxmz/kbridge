@@ -1,0 +1,11 @@
+[color]
+gamma = 1.08
+brightness = 0.0
+contrast = 1.05
+r_gain = 1.0
+g_gain = 1.0
+b_gain = 1.0
+
+[daemon]
+standby_purge_threshold_mb = 500
+physical_core_mask = 5
