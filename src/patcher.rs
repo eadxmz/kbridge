@@ -73,7 +73,6 @@ pub fn strip_driver_package(
         )
     })?;
 
-    // Only scan the directory containing the Display INF (e.g., `Graphics\`) so unrelated sub-packages aren't mixed in
     let graphics_dir = src_inf.parent().unwrap_or(src_dir);
 
     for entry in fs::read_dir(graphics_dir)?.flatten() {
@@ -96,7 +95,6 @@ pub fn strip_driver_package(
         }
     }
 
-    // Match the exact WHQL catalog file with the same stem as the INF (e.g. kit51428.inf -> kit51428.cat)
     let inf_stem = src_inf
         .file_stem()
         .unwrap_or_default()

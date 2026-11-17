@@ -20,6 +20,19 @@ const DRIVER_ACTION_VERIFY: Guid = Guid {
     data4: [0x85, 0xE5, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE],
 };
 
+// DIIRFLAG_FORCE_INF = 0x00000002 (Forces Windows to bind this INF onto matching hardware even if same/newer version exists)
+const DIIRFLAG_FORCE_INF: u32 = 0x0000_0002;
+
+#[link(name = "newdev")]
+extern "system" {
+    fn DiInstallDriverW(
+        hwndParent: *mut c_void,
+        InfPath: *const u16,
+        Flags: u32,
+        NeedReboot: *mut i32,
+    ) -> i32;
+}
+
 #[link(name = "wintrust")]
 extern "system" {
     fn CryptCATCDFOpen(
@@ -190,7 +203,6 @@ pub fn generate_cat_natively(driver_dir: &Path) -> Result<()> {
                 .to_string_lossy()
                 .trim_start_matches(r"\\?\")
                 .to_string();
-            // CRITICAL: CryptCATCDFOpen requires unquoted paths on the right-hand side
             cdf_lines.push(format!("<HASH>{}={}", fname, file_clean));
             cdf_lines.push(format!(
                 "<HASH>{}ATTR1=0x10010001:File:{}",
@@ -351,14 +363,40 @@ pub fn sign_and_install_driver(
             .to_string_lossy()
             .trim_start_matches(r"\\?\")
             .to_string();
-        println!("[*] Installing signed driver package via pnputil...");
+        println!("[*] Staging signed driver package into Windows DriverStore via pnputil...");
         let pnp_status = Command::new("pnputil")
             .args(["/add-driver", &clean_inf, "/install"])
             .status()?;
 
-        if !pnp_status.success() {
+        let code = pnp_status.code().unwrap_or(-1);
+        // Exit code 0 = installed; Exit code 259 (ERROR_NO_MORE_ITEMS) = staged into DriverStore,
+        // but device already has same/newer driver version so PnP skipped auto-overwriting.
+        if code != 0 && code != 259 && code != 3010 {
             print_recent_setupapi_errors();
-            anyhow::bail!("pnputil failed to install the driver package (exit code: {:?}).", pnp_status.code());
+            anyhow::bail!("pnputil failed to stage the driver package (exit code: {}).", code);
+        }
+
+        println!("[*] Force-binding patched igdlh64.inf onto Intel HD Graphics device (DiInstallDriverW)...");
+        let inf_wide = to_wide(&clean_inf);
+        let mut need_reboot: i32 = 0;
+        let di_ok = unsafe {
+            DiInstallDriverW(
+                std::ptr::null_mut(),
+                inf_wide.as_ptr(),
+                DIIRFLAG_FORCE_INF,
+                &mut need_reboot,
+            )
+        };
+
+        if di_ok != 0 {
+            println!("[+] Successfully bound patched driver onto Intel HD Graphics!");
+            if need_reboot != 0 {
+                println!("[!] Windows requires a system restart to activate the newly installed driver.");
+            }
+        } else {
+            print_recent_setupapi_errors();
+            println!("[!] Automatic force-bind returned a warning. You can finish binding in 10 seconds via:");
+            println!("    Device Manager -> Display adapters -> Update driver -> Browse my computer -> Let me pick -> Have Disk -> {}", clean_inf);
         }
     }
     Ok(())
