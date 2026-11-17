@@ -1,6 +1,7 @@
 /target
 /patched_driver
 *.cat
+*.cdf
 *.sys
 *.dll
 setup_kbridge.py

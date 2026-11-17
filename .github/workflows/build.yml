@@ -1,0 +1,46 @@
+name: Build KBridge Release EXE
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build optimized kbridge.exe
+        run: cargo build --release
+
+      - name: Upload kbridge.exe Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kbridge-win64
+          path: |
+            target/release/kbridge.exe
+            config.toml
+            README.md
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1.0-latest
+          name: "KBridge Latest Build (kbridge.exe)"
+          body: "Automated Windows x64 release build of `kbridge.exe` with native WinTrust `.cat` generation and WHQL-preserved Normal-Mode driver signing (No Test Mode required)."
+          prerelease: false
+          files: |
+            target/release/kbridge.exe
+            config.toml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

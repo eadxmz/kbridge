@@ -20,7 +20,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Strip, patch binaries/INF for Win10/11, self-sign, and optionally install the driver
+    /// Strip, patch INF for Win10/11, build & sign catalog (No Test Mode by default), and install
     PatchDriver {
         /// Path to the extracted original Intel 15.22.58.2993 driver folder
         #[arg(short, long)]
@@ -34,6 +34,9 @@ enum Commands {
         /// Immediately install the signed driver via pnputil
         #[arg(long, default_value_t = false)]
         install: bool,
+        /// Optional: patch .sys/.dll bytes directly (requires Windows Test Mode)
+        #[arg(long, default_value_t = false)]
+        patch_binaries_testmode: bool,
     },
     /// Apply Windows 10/11 OS tweaks, MSI interrupts, FSE, and disable WCS color reset task
     OsTune,
@@ -69,11 +72,26 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::PatchDriver { input, output, keep_ui, install } => {
-            patcher::strip_driver_package(&input, &output, keep_ui)?;
+        Commands::PatchDriver {
+            input,
+            output,
+            keep_ui,
+            install,
+            patch_binaries_testmode,
+        } => {
+            let orig_whql_cat = patcher::strip_driver_package(&input, &output, keep_ui)?;
             inf_mod::patch_inf_for_win10_11(&output.join("igdlh64.inf"), keep_ui)?;
-            patcher::patch_binaries(&output)?;
-            signer::sign_and_install_driver(&output, install)?;
+            if patch_binaries_testmode {
+                patcher::patch_binaries(&output)?;
+            } else {
+                println!("[*] Preserving original Microsoft WHQL signature on igdkmd64.sys (No Test Mode required).");
+            }
+            signer::sign_and_install_driver(
+                &output,
+                orig_whql_cat.as_deref(),
+                patch_binaries_testmode,
+                install,
+            )?;
             color::disable_windows_color_conflicts();
         }
         Commands::OsTune => {
