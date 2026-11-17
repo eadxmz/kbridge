@@ -30,13 +30,24 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
     }
 
     // PASS 1: Collect every section name referenced by `CopyFiles=...` directives
+    // AND collect all PCI\VEN_8086 device model lines from ANY [IntelGfx.NTamd64*] section
+    // (In kit51428.inf, Intel puts all device IDs under [IntelGfx.NTamd64.6.0], NOT .6.1!)
     let mut copy_sections: HashSet<String> = HashSet::new();
+    let mut captured_device_lines: Vec<String> = Vec::new();
+    let mut seen_models: HashSet<String> = HashSet::new();
+    let mut scan_section = String::new();
+
     for line in raw.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with(';') {
             continue;
         }
         let lower = trimmed.to_lowercase();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            scan_section = trimmed[1..trimmed.len() - 1].trim().to_lowercase();
+            continue;
+        }
+
         if lower.starts_with("copyfiles") {
             if let Some((_, rhs)) = trimmed.split_once('=') {
                 for item in rhs.split(',') {
@@ -47,13 +58,28 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
                 }
             }
         }
+
+        if scan_section.starts_with("intelgfx.ntamd64") && lower.contains("pci\\ven_8086") {
+            if seen_models.insert(lower) {
+                captured_device_lines.push(line.to_string());
+            }
+        }
     }
 
-    // PASS 2: Surgically prune missing files, strip ExcludeFromSelect, and unlock NTamd64.10.0
+    // Fallback safety: if an OEM INF omitted generic Ironlake/Clarkdale IDs, ensure they exist
+    if !captured_device_lines.iter().any(|l| l.to_lowercase().contains("dev_0046")) {
+        captured_device_lines.push(r"%iILKGM0% = iILKM0, PCI\VEN_8086&DEV_0046".to_string());
+    }
+    if !captured_device_lines.iter().any(|l| l.to_lowercase().contains("dev_0042")) {
+        captured_device_lines.push(r"%iILKG0% = iILKD0, PCI\VEN_8086&DEV_0042".to_string());
+    }
+
+    let model_count = captured_device_lines.len();
+
+    // PASS 2: Rewrite INF with CatalogFile, cleared ExcludeFromSelect, populated [IntelGfx.NTamd64.10.0],
+    // pruned CopyFiles/SourceDisksFiles, and the 11 hardcoded performance DWORDs.
     let mut out_lines: Vec<String> = Vec::new();
-    let mut win7_device_lines: Vec<String> = Vec::new();
     let mut current_section = String::new();
-    let mut capturing_win7 = false;
     let mut emitted_nt10_section = false;
     let mut injected_dwords = false;
     let mut pruned_count = 0usize;
@@ -62,32 +88,30 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
         let trimmed = line.trim();
         let lower = trimmed.to_lowercase();
 
-        // Point CatalogFile= to our freshly built igdlh.cat
         if lower.starts_with("catalogfile") {
             out_lines.push("CatalogFile=igdlh.cat".to_string());
             continue;
         }
 
-        // CRITICAL: Remove ExcludeFromSelect so Device Manager "Have Disk" / "Let me pick" displays the driver
         if lower.starts_with("excludefromselect") {
             out_lines.push(format!("; {}", line));
             continue;
         }
 
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            if capturing_win7 && !emitted_nt10_section {
-                capturing_win7 = false;
-                emitted_nt10_section = true;
-                out_lines.push(String::new());
-                out_lines.push("[IntelGfx.NTamd64.10.0]".to_string());
-                out_lines.extend(win7_device_lines.drain(..));
-                out_lines.push(String::new());
+            // Emit populated [IntelGfx.NTamd64.10.0] right before the first install section ([iILK...)
+            if !emitted_nt10_section && current_section.starts_with("intelgfx.ntamd64") {
+                let next_sec = trimmed[1..trimmed.len() - 1].trim().to_lowercase();
+                if !next_sec.starts_with("intelgfx.ntamd64") {
+                    out_lines.push(String::new());
+                    out_lines.push("[IntelGfx.NTamd64.10.0]".to_string());
+                    out_lines.extend(captured_device_lines.iter().cloned());
+                    out_lines.push(String::new());
+                    emitted_nt10_section = true;
+                }
             }
 
             current_section = trimmed[1..trimmed.len() - 1].trim().to_lowercase();
-            if current_section == "intelgfx.ntamd64.6.1" && !emitted_nt10_section {
-                capturing_win7 = true;
-            }
             out_lines.push(line.to_string());
             continue;
         }
@@ -143,7 +167,6 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
             }
         }
 
-        // Safely append NTamd64.10.0 to [Manufacturer] before any inline ';' comment
         if current_section == "manufacturer" && lower.contains("intelgfx") && !lower.contains("ntamd64.10.0") {
             if let Some((code_part, comment_part)) = line.split_once(';') {
                 out_lines.push(format!("{}, NTamd64.10.0 ;{}", code_part.trim_end(), comment_part));
@@ -151,10 +174,6 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
                 out_lines.push(format!("{}, NTamd64.10.0", line));
             }
             continue;
-        }
-
-        if capturing_win7 && !trimmed.is_empty() && !trimmed.starts_with(';') {
-            win7_device_lines.push(line.to_string());
         }
 
         out_lines.push(line.to_string());
@@ -167,10 +186,16 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
         }
     }
 
+    if !emitted_nt10_section {
+        out_lines.push(String::new());
+        out_lines.push("[IntelGfx.NTamd64.10.0]".to_string());
+        out_lines.extend(captured_device_lines);
+    }
+
     fs::write(inf_path, out_lines.join("\r\n"))?;
     println!(
-        "[+] Patched igdlh64.inf: added [IntelGfx.NTamd64.10.0], cleared ExcludeFromSelect, baked 11 DWORDs, pruned {} refs.",
-        pruned_count
+        "[+] Patched igdlh64.inf: added [IntelGfx.NTamd64.10.0] ({} device models), cleared ExcludeFromSelect, baked 11 DWORDs, pruned {} refs.",
+        model_count, pruned_count
     );
     Ok(())
 }

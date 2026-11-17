@@ -22,7 +22,7 @@ const DRIVER_ACTION_VERIFY: Guid = Guid {
     data4: [0x85, 0xE5, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE],
 };
 
-// INSTALLFLAG_FORCE = 0x00000001 (Forces driver installation on matching Hardware ID)
+// INSTALLFLAG_FORCE = 0x00000001
 const INSTALLFLAG_FORCE: u32 = 0x0000_0001;
 
 #[link(name = "newdev")]
@@ -285,7 +285,6 @@ pub fn generate_cat_natively(driver_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Removes any stale `oem*.inf` packages in DriverStore from earlier failed attempts so `pnputil` stages fresh.
 fn purge_stale_oem_packages() {
     if let Ok(out) = Command::new("pnputil").args(["/enum-drivers"]).output() {
         let text = String::from_utf8_lossy(&out.stdout);
@@ -311,7 +310,6 @@ fn purge_stale_oem_packages() {
     }
 }
 
-/// Detects the active Intel PCI display adapter Hardware IDs (e.g., `PCI\VEN_8086&DEV_0046&SUBSYS_392017AA&REV_02`).
 fn detect_intel_gpu_hardware_ids() -> Vec<String> {
     let mut hw_ids = Vec::new();
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
@@ -467,7 +465,7 @@ pub fn sign_and_install_driver(
             let last_err = std::io::Error::last_os_error();
             println!("[!] Direct PnP bind returned OS error: {}", last_err);
             print_recent_setupapi_errors();
-            println!("\n[i] ExcludeFromSelect has now been cleared from igdlh64.inf, so you can also finish in 10 seconds via:");
+            println!("\n[i] You can also finish binding in 10 seconds via:");
             println!("    Device Manager -> Display adapters -> Microsoft Basic Display Adapter -> Update driver");
             println!("    -> Browse my computer -> Let me pick -> Have Disk -> {}", clean_inf);
         }

@@ -34,9 +34,9 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.3.5-latest
+          tag_name: v0.3.6-latest
           name: "KBridge Latest Build (kbridge.exe)"
-          body: "Interactive menu-driven Windows x64 release build of `kbridge.exe` that strips ExcludeFromSelect (fixes Device Manager Have Disk compatibility dialog), purges stale oem*.inf entries, and force-binds the patched driver via UpdateDriverForPlugAndPlayDevicesW."
+          body: "Interactive menu-driven Windows x64 release build of `kbridge.exe` that clones device models from [IntelGfx.NTamd64.6.0] (used by kit51428.inf) into [IntelGfx.NTamd64.10.0], fixes Hardware ID matching (0xe0000228), and force-binds Intel HD Graphics in Normal Mode."
           prerelease: false
           files: |
             target/release/kbridge.exe
