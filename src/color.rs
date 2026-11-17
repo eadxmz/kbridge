@@ -50,7 +50,7 @@ pub fn read_intel_cui_color_from_registry() -> Option<ColorConfig> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let cui = hkcu.open_subkey(r"Software\Intel\Display\igfxcui\Color").ok()?;
     let gamma_raw: u32 = cui.get_value("Gamma").unwrap_or(100);
-    let bright_raw: i32 = cui.get_value("Brightness").unwrap_or(0);
+    let bright_raw: i32 = cui.get_value::<u32, _>("Brightness").unwrap_or(0) as i32;
     let contrast_raw: u32 = cui.get_value("Contrast").unwrap_or(100);
 
     Some(ColorConfig {

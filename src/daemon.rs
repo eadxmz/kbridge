@@ -12,10 +12,28 @@ use windows_sys::Win32::System::Threading::{
     OpenProcess, SetPriorityClass, SetProcessAffinityMask, HIGH_PRIORITY_CLASS,
     PROCESS_SET_INFORMATION,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    ChangeDisplaySettingsExW, EnumDisplaySettingsW, GetForegroundWindow,
-    GetWindowThreadProcessId, CDS_RESET, CDS_UPDATEREGISTRY, ENUM_CURRENT_SETTINGS,
-};
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+
+const ENUM_CURRENT_SETTINGS: u32 = 0xFFFF_FFFF;
+const CDS_UPDATEREGISTRY: u32 = 0x0000_0001;
+const CDS_RESET: u32 = 0x4000_0000;
+
+#[link(name = "user32")]
+extern "system" {
+    fn EnumDisplaySettingsW(
+        lpszDeviceName: *const u16,
+        iModeNum: u32,
+        lpDevMode: *mut DEVMODEW,
+    ) -> i32;
+
+    fn ChangeDisplaySettingsExW(
+        lpszDeviceName: *const u16,
+        lpDevMode: *const DEVMODEW,
+        hwnd: HWND,
+        dwflags: u32,
+        lParam: *const c_void,
+    ) -> i32;
+}
 
 #[link(name = "ntdll")]
 extern "system" {
@@ -115,7 +133,8 @@ pub fn boost_foreground_process(physical_core_mask: usize) {
 }
 
 pub fn run_daemon_loop(fallback_color: ColorConfig) {
-    println!("[*] Starting KBridge Daemon (0.5ms Timer + LUT Guard + Standby Purger)...");
+    println!("[*] KBridge Daemon Active (0.5ms Timer + Color LUT Guard + Standby Purger)...");
+    println!("[*] Keep this window open or minimized (or use Option [7] to run automatically at login).");
     lock_kernel_timer_05ms(true);
 
     let mut last_hwnd: isize = 0;

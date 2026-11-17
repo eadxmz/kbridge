@@ -85,7 +85,6 @@ fn to_wide(s: &str) -> Vec<u16> {
         .collect()
 }
 
-/// Registers a `.cat` security catalog directly into Windows System32\CatRoot via WinTrust API.
 pub fn register_catalog_in_catroot(cat_path: &Path, base_name: &str) -> bool {
     if !cat_path.exists() {
         return false;
@@ -114,11 +113,8 @@ pub fn register_catalog_in_catroot(cat_path: &Path, base_name: &str) -> bool {
     }
 }
 
-/// Generates a fresh `igdlh.cat` for all files in `driver_dir` using built-in `wintrust.dll` APIs.
-/// No WDK or `Inf2Cat.exe` installation is required.
 pub fn generate_cat_natively(driver_dir: &Path) -> Result<()> {
     let abs_dir = driver_dir.canonicalize().unwrap_or_else(|_| driver_dir.to_path_buf());
-    // Strip `\\?\` prefix from canonicalized path because CryptCATCDFOpen prefers standard Win32 paths
     let clean_dir_str = abs_dir
         .to_string_lossy()
         .trim_start_matches(r"\\?\")
@@ -230,38 +226,24 @@ pub fn sign_and_install_driver(
     enable_testmode: bool,
     install_now: bool,
 ) -> Result<()> {
-    // 1. Register original Microsoft WHQL catalog into CatRoot so CI.dll trusts untouched igdkmd64.sys without Test Mode
     if let Some(whql_cat) = orig_whql_cat {
         if register_catalog_in_catroot(whql_cat, "igdlh_intel_whql.cat") {
             println!("[+] Registered original Microsoft WHQL catalog (igdlh_intel_whql.cat) in Windows CatRoot.");
         }
     }
 
-    // 2. Build the new igdlh.cat covering our modified igdlh64.inf + stripped package
     generate_cat_natively(driver_dir)?;
 
-    // 3. Only enable Test Mode if the user explicitly requested binary .sys patching
     if enable_testmode {
         let _ = Command::new("bcdedit").args(["/set", "testsigning", "on"]).status();
         let _ = Command::new("bcdedit").args(["/set", "nointegritychecks", "on"]).status();
-        println!("[*] Enabled Windows Test Mode for modified .sys binary.");
     }
 
-    // 4. Create Local Trusted Root CA & TrustedPublisher cert and sign igdlh.cat
     let abs_dir = driver_dir.canonicalize().unwrap_or_else(|_| driver_dir.to_path_buf());
     let clean_dir = abs_dir
         .to_string_lossy()
         .trim_start_matches(r"\\?\")
         .to_string();
-
-    let sign_sys_snippet = if enable_testmode {
-        format!(
-            r#"Set-AuthenticodeSignature -FilePath "{0}\igdkmd64.sys" -Certificate $cert -HashAlgorithm SHA256 | Out-Null"#,
-            clean_dir
-        )
-    } else {
-        String::new()
-    };
 
     let ps_script = format!(
         r#"
@@ -282,9 +264,8 @@ pub fn sign_and_install_driver(
         if (Test-Path "{0}\igdlh.cat") {{
             Set-AuthenticodeSignature -FilePath "{0}\igdlh.cat" -Certificate $cert -HashAlgorithm SHA256 | Out-Null
         }}
-        {1}
         "#,
-        clean_dir, sign_sys_snippet
+        clean_dir
     );
 
     let status = Command::new("powershell")
@@ -296,7 +277,6 @@ pub fn sign_and_install_driver(
         println!("[+] Signed igdlh.cat with local Trusted Root & TrustedPublisher certificate.");
     }
 
-    // 5. Register the newly signed igdlh.cat in Windows CatRoot as well
     let new_cat = abs_dir.join("igdlh.cat");
     if register_catalog_in_catroot(&new_cat, "igdlh.cat") {
         println!("[+] Registered signed igdlh.cat into Windows CatRoot.");
