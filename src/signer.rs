@@ -219,6 +219,19 @@ pub fn generate_cat_natively(driver_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn print_recent_setupapi_errors() {
+    let log_path = Path::new(r"C:\Windows\INF\setupapi.dev.log");
+    if let Ok(content) = fs::read_to_string(log_path) {
+        let lines: Vec<&str> = content.lines().rev().take(35).collect();
+        println!("[!] Recent SetupAPI log details:");
+        for l in lines.into_iter().rev() {
+            if l.contains("!!!") || l.contains("flq:") || l.contains("inf:") || l.contains("sto:") {
+                println!("    {}", l.trim());
+            }
+        }
+    }
+}
+
 pub fn sign_and_install_driver(
     driver_dir: &Path,
     orig_whql_cat: Option<&Path>,
@@ -288,9 +301,14 @@ pub fn sign_and_install_driver(
             .trim_start_matches(r"\\?\")
             .to_string();
         println!("[*] Installing signed driver package via pnputil...");
-        Command::new("pnputil")
+        let pnp_status = Command::new("pnputil")
             .args(["/add-driver", &clean_inf, "/install"])
             .status()?;
+
+        if !pnp_status.success() {
+            print_recent_setupapi_errors();
+            anyhow::bail!("pnputil failed to install the driver package (exit code: {:?}).", pnp_status.code());
+        }
     }
     Ok(())
 }

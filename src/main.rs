@@ -76,7 +76,7 @@ fn run_driver_workflow(install_now: bool) -> Result<()> {
     println!("\n[*] Scanning package, stripping bloatware & keeping core WDDM files...");
     let pkg = patcher::strip_driver_package(&input_dir, &out_dir, keep_ui)?;
 
-    println!("[*] Unlocking Windows 10/11 target & baking 11 performance DWORDs into INF...");
+    println!("[*] Unlocking Windows 10/11 target, pruning stripped CopyFiles entries & baking 11 DWORDs...");
     inf_mod::patch_inf_for_win10_11(&pkg.inf_path, &out_dir, keep_ui)?;
 
     println!("[*] Preserving original WHQL signature on igdkmd64.sys (No Test Mode required)...");

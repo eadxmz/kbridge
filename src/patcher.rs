@@ -61,6 +61,9 @@ pub fn strip_driver_package(
     out_dir: &Path,
     keep_ui: bool,
 ) -> Result<StrippedPackage> {
+    if out_dir.exists() {
+        let _ = fs::remove_dir_all(out_dir);
+    }
     fs::create_dir_all(out_dir)?;
 
     let mut all_files = Vec::new();
