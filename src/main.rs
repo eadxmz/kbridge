@@ -9,8 +9,17 @@ use anyhow::Result;
 use color::ColorConfig;
 use std::env;
 use std::io::{self, Write};
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+const DETACHED_PROCESS: u32 = 0x0000_0008;
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn FreeConsole() -> i32;
+}
 
 fn prompt(msg: &str) -> String {
     print!("{}", msg);
@@ -87,7 +96,7 @@ fn run_driver_workflow(install_now: bool) -> Result<()> {
     if !install_now {
         println!("[i] Next: Run Option [1] to install directly, or install via Device Manager -> Have Disk.");
     } else {
-        println!("[i] Next: Reboot if prompted, then run Option [3] to apply anti-stutter OS & daemon tweaks.");
+        println!("[i] Next: Reboot if prompted, then run Option [3] to apply anti-stutter OS & invisible daemon tweaks.");
     }
     Ok(())
 }
@@ -123,33 +132,39 @@ fn run_display_preset_menu() {
             contrast,
             ..Default::default()
         };
-        color::apply_gamma_ramp_if_changed(&cfg);
+        color::apply_gamma_ramp_force(&cfg);
         println!("[+] Applied {}x{} (Gamma {:.2}, Contrast {:.2}).", w, h, gamma, contrast);
     } else {
         println!("[!] Display mode {}x{} was rejected by the display adapter.", w, h);
     }
 }
 
-fn setup_and_run_daemon(register_startup: bool) -> Result<()> {
-    println!("\n--- Anti-Stutter Color & Frame-Pacing Daemon Setup ---");
-    println!("[i] Event-driven WinEvent hook + conditional LUT guard (zero periodic stutter).");
-    let g_str = prompt("Fallback Gamma if Intel Control Panel isn't used [default: 1.08]: ");
-    let gamma: f32 = if g_str.is_empty() {
-        1.08
-    } else {
-        g_str.parse().unwrap_or(1.08)
-    };
+/// Registers KBridgeOptDaemon with Priority 0 (Realtime Logon Priority, 0s Delay, Hidden)
+/// so it executes the exact millisecond Windows logs in without opening any console window.
+fn register_instant_hidden_startup_task(exe_path: &Path, gamma: f32, contrast: f32) -> Result<()> {
+    let ps_script = format!(
+        r#"
+        $ErrorActionPreference = 'Stop'
+        $action = New-ScheduledTaskAction -Execute '{0}' -Argument '--daemon --gamma {1} --contrast {2}'
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -Priority 0 -Hidden
+        $principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-544' -RunLevel Highest
+        Register-ScheduledTask -TaskName 'KBridgeOptDaemon' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+        "#,
+        exe_path.display(),
+        gamma,
+        contrast
+    );
 
-    let c_str = prompt("Fallback Contrast [default: 1.05]: ");
-    let contrast: f32 = if c_str.is_empty() {
-        1.05
-    } else {
-        c_str.parse().unwrap_or(1.05)
-    };
+    let status = Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps_script])
+        .status()?;
 
-    if register_startup {
-        let exe = env::current_exe()?;
-        let status = Command::new("schtasks")
+    if status.success() {
+        println!("[+] Registered instant Priority-0 hidden startup task (KBridgeOptDaemon).");
+    } else {
+        // Fallback to schtasks if PowerShell cmdlets are stripped on tiny Windows builds
+        let _ = Command::new("schtasks")
             .args([
                 "/Create",
                 "/F",
@@ -162,16 +177,64 @@ fn setup_and_run_daemon(register_startup: bool) -> Result<()> {
                 "/TR",
                 &format!(
                     "\"{}\" --daemon --gamma {} --contrast {}",
-                    exe.display(),
+                    exe_path.display(),
                     gamma,
                     contrast
                 ),
             ])
-            .status()?;
-        if status.success() {
-            println!("[+] Registered KBridgeOptDaemon to start silently at every Windows Logon.");
-        }
+            .status();
+        println!("[+] Registered KBridgeOptDaemon logon task via schtasks.");
     }
+    Ok(())
+}
+
+/// Spawns `kbridge.exe --daemon` as a completely headless, windowless background process
+/// so the interactive menu returns immediately and no Command Prompt window stays open.
+fn spawn_headless_daemon_now(exe_path: &Path, gamma: f32, contrast: f32) -> Result<()> {
+    let my_pid = std::process::id();
+    // Terminate any previous background kbridge.exe instance first
+    let _ = Command::new("taskkill")
+        .args([
+            "/F",
+            "/FI",
+            &format!("PID ne {}", my_pid),
+            "/IM",
+            "kbridge.exe",
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+
+    Command::new(exe_path)
+        .args([
+            "--daemon",
+            "--gamma",
+            &gamma.to_string(),
+            "--contrast",
+            &contrast.to_string(),
+        ])
+        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .spawn()?;
+
+    println!("[+] KBridge Background Guard is now running invisibly in the background (0 windows)!");
+    Ok(())
+}
+
+fn setup_and_run_daemon(register_startup: bool) -> Result<()> {
+    println!("\n--- Invisible Color Guard & Anti-Stutter Daemon Setup ---");
+    println!("[i] Locks your Gamma/Contrast (even inside Windows Settings -> Display) with zero open windows.");
+    let g_str = prompt("Desired Gamma [default: 1.08]: ");
+    let gamma: f32 = if g_str.is_empty() {
+        1.08
+    } else {
+        g_str.parse().unwrap_or(1.08)
+    };
+
+    let c_str = prompt("Desired Contrast [default: 1.05]: ");
+    let contrast: f32 = if c_str.is_empty() {
+        1.05
+    } else {
+        c_str.parse().unwrap_or(1.05)
+    };
 
     color::disable_windows_color_conflicts();
     let cfg = ColorConfig {
@@ -179,7 +242,14 @@ fn setup_and_run_daemon(register_startup: bool) -> Result<()> {
         contrast,
         ..Default::default()
     };
-    daemon::run_daemon_loop(cfg);
+    color::apply_gamma_ramp_force(&cfg);
+
+    let exe = env::current_exe()?;
+    if register_startup {
+        register_instant_hidden_startup_task(&exe, gamma, contrast)?;
+    }
+
+    spawn_headless_daemon_now(&exe, gamma, contrast)?;
     Ok(())
 }
 
@@ -216,7 +286,11 @@ fn parse_background_daemon_args() -> Option<ColorConfig> {
 }
 
 fn main() -> Result<()> {
+    // If launched with `--daemon`, immediately detach and destroy any console window
     if let Some(bg_cfg) = parse_background_daemon_args() {
+        unsafe {
+            FreeConsole();
+        }
         color::disable_windows_color_conflicts();
         daemon::run_daemon_loop(bg_cfg);
         return Ok(());
@@ -224,20 +298,20 @@ fn main() -> Result<()> {
 
     loop {
         println!("\n==================================================================");
-        println!("  KBridge v0.4.0 - Intel HD Graphics (15.22.58.2993) Optimizer");
+        println!("  KBridge v0.4.1 - Intel HD Graphics (15.22.58.2993) Optimizer");
         println!("==================================================================");
         println!("  --- STEP 1: DRIVER PATCH & INSTALL ---");
         println!("  [1] Patch, Sign & Install Driver (Normal Mode - No Test Mode)");
         println!("  [2] Patch & Sign Driver Only (Export folder without installing)");
         println!();
         println!("  --- STEP 2: RUN ONCE AFTER DRIVER INSTALL (ANTI-STUTTER) ---");
-        println!("  [3] Apply Win10/11 Anti-Stutter OS Tweaks + Start Event Daemon");
+        println!("  [3] Apply Win10/11 Anti-Stutter Tweaks + Enable Invisible Guard");
         println!();
         println!("  --- OPTIONAL DAILY TOGGLES (USE ANYTIME) ---");
         println!("  [4] GPU Mode: OVERDRIVE (Lock Max Clocks, RC6 Off - Best FPS)");
         println!("  [5] GPU Mode: ECO (Stock Clocks, Power Saving - Cooler/Battery)");
         println!("  [6] Change Display Resolution & Gamma Preset");
-        println!("  [7] Start Background Guard Now (This Session Only, No Startup)");
+        println!("  [7] Start Invisible Background Guard Now (This Session Only)");
         println!("  [0] Exit");
         println!("==================================================================");
 

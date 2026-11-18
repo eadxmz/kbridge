@@ -34,9 +34,9 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.4.0-latest
+          tag_name: v0.4.1-latest
           name: "KBridge Latest Build (kbridge.exe)"
-          body: "Anti-stutter v0.4.0 release: event-driven WinEvent foreground hook (eliminates 3s polling spikes), conditional gamma ramp updates, PCIe ASPM + 100% CPU min-state powercfg tuning, MMCSS GPU priority=8, DWM hardware overlay disable for WDDM 1.1, and 60s Standby RAM cooldown."
+          body: "v0.4.1 release: fixes HWINEVENTHOOK E0308 build error, runs daemon 100% invisibly via FreeConsole + CREATE_NO_WINDOW, registers Priority-0 instant logon scheduled task (zero boot delay), and bypasses win32k GDI LUT caching so Windows Settings -> Display can never revert gamma/contrast."
           prerelease: false
           files: |
             target/release/kbridge.exe

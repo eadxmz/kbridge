@@ -1,9 +1,12 @@
 use std::ffi::c_void;
 use std::process::Command;
+use std::sync::atomic::{AtomicU16, Ordering};
 use windows_sys::Win32::Graphics::Gdi::{GetDC, ReleaseDC, HDC};
-use windows_sys::Win32::UI::ColorSystem::{GetDeviceGammaRamp, SetDeviceGammaRamp};
+use windows_sys::Win32::UI::ColorSystem::SetDeviceGammaRamp;
 use winreg::enums::*;
 use winreg::RegKey;
+
+static CACHE_BUSTER_BIT: AtomicU16 = AtomicU16::new(0);
 
 #[repr(C)]
 #[derive(PartialEq, Eq)]
@@ -86,24 +89,19 @@ pub fn build_gamma_ramp(cfg: &ColorConfig) -> GammaRamp {
     ramp
 }
 
-/// Only pushes SetDeviceGammaRamp if the active hardware LUT differs from our target curve.
-/// Avoids periodic GDI pipeline stalls during 60fps video playback.
-pub fn apply_gamma_ramp_if_changed(cfg: &ColorConfig) -> bool {
-    let target = build_gamma_ramp(cfg);
+/// Forces Windows `win32kfull.sys` to send the LUT IOCTL to `igdkmd64.sys` even after
+/// Windows Settings -> Display resets the hardware LUT behind GDI's back.
+/// Flipping bit 0 (`1/65535`) bypasses `win32k`'s `RtlCompareMemory` cache check while mapping
+/// to the exact same 8-bit/10-bit hardware register (`val >> 8`), causing zero visual flicker.
+pub fn apply_gamma_ramp_force(cfg: &ColorConfig) -> bool {
+    let mut target = build_gamma_ramp(cfg);
+    let bit = CACHE_BUSTER_BIT.fetch_xor(1, Ordering::Relaxed) & 1;
+    target.blue[255] = (target.blue[255] & !1) | bit;
+
     unsafe {
         let hdc: HDC = GetDC(std::ptr::null_mut());
         if hdc.is_null() {
             return false;
-        }
-        let mut current = GammaRamp {
-            red: [0; 256],
-            green: [0; 256],
-            blue: [0; 256],
-        };
-        let got_cur = GetDeviceGammaRamp(hdc, &mut current as *mut _ as *mut c_void) != 0;
-        if got_cur && current == target {
-            ReleaseDC(std::ptr::null_mut(), hdc);
-            return true;
         }
         let ok = SetDeviceGammaRamp(hdc, &target as *const _ as *const c_void) != 0;
         ReleaseDC(std::ptr::null_mut(), hdc);

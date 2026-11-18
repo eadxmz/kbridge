@@ -83,7 +83,6 @@ pub fn apply_win10_11_os_tweaks() -> Result<()> {
 }
 
 fn apply_anti_stutter_power_plan() {
-    // SUB_PCIEXPRESS (5012eeed-3c32-40de-8c5e-835a2d65777b) -> ASPM (ee12f906-d277-404b-b6da-e5fa1a576df5) = 0 (Off)
     let _ = Command::new("powercfg")
         .args([
             "/SETACVALUEINDEX",
@@ -94,7 +93,6 @@ fn apply_anti_stutter_power_plan() {
         ])
         .output();
 
-    // SUB_PROCESSOR (54533251-82be-4824-96c1-47b60b740d00) -> PROCTHROTTLEMIN (893dee8e-2bef-41e0-89c6-b55d0929964c) = 100%
     let _ = Command::new("powercfg")
         .args([
             "/SETACVALUEINDEX",
@@ -105,7 +103,6 @@ fn apply_anti_stutter_power_plan() {
         ])
         .output();
 
-    // Disable USB selective suspend (2a737441-1930-4402-8d77-b2bebba308a3 / 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 = 0)
     let _ = Command::new("powercfg")
         .args([
             "/SETACVALUEINDEX",
@@ -145,7 +142,6 @@ fn enable_msi_and_high_irq_priority(hklm: &RegKey) -> Result<()> {
                             }
                         }
 
-                        // Set High DevicePriority (3) on GPU, SATA, and USB interrupts (keep MSI off for Ironlake GPU)
                         let prio_path = format!(
                             r"SYSTEM\CurrentControlSet\Enum\PCI\{}\{}\Device Parameters\Interrupt Management\Affinity Policy",
                             dev_id, inst_id
