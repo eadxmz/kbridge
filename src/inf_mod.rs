@@ -1,24 +1,62 @@
+use crate::patcher::read_inf_text;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
-const HARDCODED_INF_DWORDS: &[(&str, u32)] = &[
+const HARDCODED_INF_DWORDS_COMMON: &[(&str, u32)] = &[
+    // Clock, Render Boost & Power Gating
     ("DisableDynamicClocking", 1),
     ("ForceRenderPState", 0),
     ("RC6Enable", 0),
     ("PowerGatingEnabled", 0),
+    ("EnableMidGfxPowerSaving", 0),
+    ("ACUserPreferencePolicy", 0),
+    ("DCUserPreferencePolicy", 0),
+    ("TurboBoostEnable", 1),
+    ("DisplayPowerSavingTechnology", 0),
+    ("Disable_PSR", 1),
+    ("PsrDisable", 1),
+    ("FeatureTestControl", 0x0000_9240),
+    // Memory, GTT & VRAM Allocation
     ("IncreaseFixedSegment", 1),
     ("ForceGTTCacheable", 1),
     ("DisableTiledMemory", 0),
-    ("TotalStaticVRAM", 536870912),
+    ("EnableDynamicMemoryAllocation", 1),
+    ("GttSize", 512),
+    // 1440p60 Media Pipeline & Low-Latency Render
     ("Disable_OverlayDSQualityEnhancement", 1),
+    ("DisableVideoPostProcessing", 1),
+    ("SmoothVideo", 0),
+    ("TotalColorCorrection", 0),
+    ("MediaDecodePriority", 1),
+    ("ForceDXVA2", 1),
     ("AdaptiveVsyncEnable", 0),
     ("AsyncFlips", 1),
+    ("FlipQueueSize", 1),
+    ("D3D_FlipInterval", 0),
 ];
 
-pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) -> Result<()> {
-    let raw = fs::read_to_string(inf_path)?;
+const HASWELL_EXTRA_DWORDS: &[(&str, u32)] = &[
+    ("TotalStaticVRAM", 1_073_741_824), // 1 GB virtual dedicated report for Haswell HD 4400
+    ("EnableVP9HybridDecode", 1),       // Hardware-assisted VP9 decode on Haswell 15.40
+    ("ShaderCache", 1),                 // Eliminates D3D11/OpenGL shader compile stutter
+    ("EnableHardwareScheduling", 1),
+];
+
+const IRONLAKE_EXTRA_DWORDS: &[(&str, u32)] = &[
+    ("TotalStaticVRAM", 536_870_912), // 512 MB static report for Ironlake
+];
+
+pub fn patch_inf_for_win10_11(
+    inf_path: &Path,
+    out_dir: &Path,
+    keep_ui: bool,
+    is_haswell: bool,
+) -> Result<()> {
+    let raw = read_inf_text(inf_path)?;
+    let raw_lower = raw.to_lowercase();
+    let already_has_nt10 = raw_lower.contains("[intelgfx.ntamd64.10.0]");
 
     let mut existing_files: HashSet<String> = HashSet::new();
     if let Ok(entries) = fs::read_dir(out_dir) {
@@ -29,6 +67,7 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
         }
     }
 
+    // PASS 1: Collect CopyFiles sections & all PCI\VEN_8086 device models from any [IntelGfx.NTamd64*] section
     let mut copy_sections: HashSet<String> = HashSet::new();
     let mut captured_device_lines: Vec<String> = Vec::new();
     let mut seen_models: HashSet<String> = HashSet::new();
@@ -63,18 +102,21 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
         }
     }
 
-    if !captured_device_lines.iter().any(|l| l.to_lowercase().contains("dev_0046")) {
-        captured_device_lines.push(r"%iILKGM0% = iILKM0, PCI\VEN_8086&DEV_0046".to_string());
-    }
-    if !captured_device_lines.iter().any(|l| l.to_lowercase().contains("dev_0042")) {
-        captured_device_lines.push(r"%iILKG0% = iILKD0, PCI\VEN_8086&DEV_0042".to_string());
+    if !is_haswell {
+        if !captured_device_lines.iter().any(|l| l.to_lowercase().contains("dev_0046")) {
+            captured_device_lines.push(r"%iILKGM0% = iILKM0, PCI\VEN_8086&DEV_0046".to_string());
+        }
+        if !captured_device_lines.iter().any(|l| l.to_lowercase().contains("dev_0042")) {
+            captured_device_lines.push(r"%iILKG0% = iILKD0, PCI\VEN_8086&DEV_0042".to_string());
+        }
     }
 
     let model_count = captured_device_lines.len();
 
+    // PASS 2: Rewrite INF cleanly
     let mut out_lines: Vec<String> = Vec::new();
     let mut current_section = String::new();
-    let mut emitted_nt10_section = false;
+    let mut emitted_nt10_section = already_has_nt10;
     let mut injected_dwords = false;
     let mut pruned_count = 0usize;
 
@@ -153,14 +195,22 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
                 dest_file.clone()
             };
 
-            let ui_blocked = !keep_ui && (dest_file == "gfxui.exe" || dest_file == "igfxrenu.lrc");
+            let ui_blocked = !keep_ui
+                && (dest_file == "gfxui.exe"
+                    || dest_file == "gfxuiex.exe"
+                    || dest_file == "gfxv4_0.exe"
+                    || dest_file == "igfxrenu.lrc");
             if ui_blocked || !existing_files.contains(&src_file) {
                 pruned_count += 1;
                 continue;
             }
         }
 
-        if current_section == "manufacturer" && lower.contains("intelgfx") && !lower.contains("ntamd64.10.0") {
+        if !already_has_nt10
+            && current_section == "manufacturer"
+            && lower.contains("intelgfx")
+            && !lower.contains("ntamd64.10.0")
+        {
             if let Some((code_part, comment_part)) = line.split_once(';') {
                 out_lines.push(format!("{}, NTamd64.10.0 ;{}", code_part.trim_end(), comment_part));
             } else {
@@ -170,9 +220,21 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
         }
 
         out_lines.push(line.to_string());
-        if current_section == "igfx_softwaredevicesettings" && !injected_dwords {
-            out_lines.push("; --- KBridge Hardcoded Performance & Memory Flags ---".to_string());
-            for (key, val) in HARDCODED_INF_DWORDS {
+
+        // Inject DWORDs into [igfx_SoftwareDeviceSettings] or [SoftBIOS_AddReg] / Haswell software device settings
+        let is_sw_settings = current_section == "igfx_softwaredevicesettings"
+            || current_section.ends_with("_softwaredevicesettings");
+        if is_sw_settings && !injected_dwords {
+            out_lines.push("; --- KBridge v0.5.0 Ultimate Performance & 1440p60 Media Flags ---".to_string());
+            for (key, val) in HARDCODED_INF_DWORDS_COMMON {
+                out_lines.push(format!("HKR,,\"{}\",%REG_DWORD%,0x{:08X}", key, val));
+            }
+            let extra = if is_haswell {
+                HASWELL_EXTRA_DWORDS
+            } else {
+                IRONLAKE_EXTRA_DWORDS
+            };
+            for (key, val) in extra {
                 out_lines.push(format!("HKR,,\"{}\",%REG_DWORD%,0x{:08X}", key, val));
             }
             injected_dwords = true;
@@ -185,10 +247,17 @@ pub fn patch_inf_for_win10_11(inf_path: &Path, out_dir: &Path, keep_ui: bool) ->
         out_lines.extend(captured_device_lines);
     }
 
+    let total_flags = HARDCODED_INF_DWORDS_COMMON.len()
+        + if is_haswell {
+            HASWELL_EXTRA_DWORDS.len()
+        } else {
+            IRONLAKE_EXTRA_DWORDS.len()
+        };
+
     fs::write(inf_path, out_lines.join("\r\n"))?;
     println!(
-        "[+] Patched igdlh64.inf: added [IntelGfx.NTamd64.10.0] ({} device models), cleared ExcludeFromSelect, baked 11 DWORDs, pruned {} refs.",
-        model_count, pruned_count
+        "[+] Patched igdlh64.inf: Win10/11 target ready ({} models), baked {} DWORDs, pruned {} bloat refs.",
+        model_count, total_flags, pruned_count
     );
     Ok(())
 }

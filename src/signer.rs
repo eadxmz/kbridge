@@ -37,17 +37,12 @@ extern "system" {
 
 #[link(name = "wintrust")]
 extern "system" {
-    fn CryptCATCDFOpen(
-        pwszFilePath: *const u16,
-        pfnParseError: *const c_void,
-    ) -> *mut c_void;
-
+    fn CryptCATCDFOpen(pwszFilePath: *const u16, pfnParseError: *const c_void) -> *mut c_void;
     fn CryptCATCDFEnumCatAttributes(
         pCDF: *mut c_void,
         pPrevAttr: *mut c_void,
         pfnParseError: *const c_void,
     ) -> *mut c_void;
-
     fn CryptCATCDFEnumMembersByCDFTagEx(
         pCDF: *mut c_void,
         pwszPrevCDFTag: *mut u16,
@@ -56,7 +51,6 @@ extern "system" {
         fContinueOnError: i32,
         pvReserved: *mut c_void,
     ) -> *mut u16;
-
     fn CryptCATCDFEnumAttributesWithCDFTag(
         pCDF: *mut c_void,
         pwszMemberTag: *mut u16,
@@ -64,9 +58,7 @@ extern "system" {
         pPrevAttr: *mut c_void,
         pfnParseError: *const c_void,
     ) -> *mut c_void;
-
     fn CryptCATCDFClose(pCDF: *mut c_void) -> i32;
-
     fn CryptCATOpen(
         pwszFileName: *const u16,
         fdwOpenFlags: u32,
@@ -74,37 +66,25 @@ extern "system" {
         dwPublicVersion: u32,
         dwEncodingType: u32,
     ) -> isize;
-
-    fn CryptCATEnumerateMember(
-        hCatalog: isize,
-        pPrevMember: *mut c_void,
-    ) -> *mut c_void;
-
+    fn CryptCATEnumerateMember(hCatalog: isize, pPrevMember: *mut c_void) -> *mut c_void;
     fn CryptCATClose(hCatalog: isize) -> i32;
-
     fn CryptCATAdminAcquireContext(
         phCatAdmin: *mut isize,
         pgSubsystem: *const Guid,
         dwFlags: u32,
     ) -> i32;
-
     fn CryptCATAdminAddCatalog(
         hCatAdmin: isize,
         pwszCatalogFile: *const u16,
         pwszSelectBaseName: *const u16,
         dwFlags: u32,
     ) -> isize;
-
     fn CryptCATAdminReleaseCatalogContext(
         hCatAdmin: isize,
         hCatInfo: isize,
         dwFlags: u32,
     ) -> i32;
-
-    fn CryptCATAdminReleaseContext(
-        hCatAdmin: isize,
-        dwFlags: u32,
-    ) -> i32;
+    fn CryptCATAdminReleaseContext(hCatAdmin: isize, dwFlags: u32) -> i32;
 }
 
 fn to_wide(s: &str) -> Vec<u16> {
@@ -127,12 +107,7 @@ pub fn register_catalog_in_catroot(cat_path: &Path, base_name: &str) -> bool {
         if CryptCATAdminAcquireContext(&mut h_admin, &DRIVER_ACTION_VERIFY, 0) == 0 {
             return false;
         }
-        let h_cat = CryptCATAdminAddCatalog(
-            h_admin,
-            cat_wide.as_ptr(),
-            name_wide.as_ptr(),
-            0,
-        );
+        let h_cat = CryptCATAdminAddCatalog(h_admin, cat_wide.as_ptr(), name_wide.as_ptr(), 0);
         let ok = h_cat != 0;
         if ok {
             CryptCATAdminReleaseCatalogContext(h_admin, h_cat, 0);
@@ -186,7 +161,7 @@ pub fn generate_cat_natively(driver_dir: &Path) -> Result<()> {
         "PublicVersion=0x0000001".to_string(),
         "EncodingType=0x00010001".to_string(),
         "PageHashes=true".to_string(),
-        "CATATTR1=0x10010001:OSAttr:2:6.1,2:6.2,2:10.0".to_string(),
+        "CATATTR1=0x10010001:OSAttr:2:6.1,2:6.2,2:6.3,2:10.0".to_string(),
         String::new(),
         "[CatalogFiles]".to_string(),
     ];
@@ -206,10 +181,7 @@ pub fn generate_cat_natively(driver_dir: &Path) -> Result<()> {
                 .trim_start_matches(r"\\?\")
                 .to_string();
             cdf_lines.push(format!("<HASH>{}={}", fname, file_clean));
-            cdf_lines.push(format!(
-                "<HASH>{}ATTR1=0x10010001:File:{}",
-                fname, fname
-            ));
+            cdf_lines.push(format!("<HASH>{}ATTR1=0x10010001:File:{}", fname, fname));
             expected_files += 1;
         }
     }
@@ -292,11 +264,14 @@ fn purge_stale_oem_packages() {
             let trimmed = line.trim();
             if let Some((_, val)) = trimmed.split_once(':') {
                 let v = val.trim();
-                if v.to_lowercase().starts_with("oem") && v.to_lowercase().ends_with(".inf") {
+                let low = v.to_lowercase();
+                if low.starts_with("oem") && low.ends_with(".inf") {
                     current_oem = Some(v.to_string());
                 } else if let Some(ref oem) = current_oem {
-                    let low = v.to_lowercase();
-                    if low == "igdlh64.inf" || low == "kit51428.inf" || low == "kit51681.inf" {
+                    if low == "igdlh64.inf"
+                        || low.starts_with("kit") && low.ends_with(".inf")
+                        || low.starts_with("igdlh") && low.ends_with(".inf")
+                    {
                         println!("[*] Removing stale DriverStore package {} ({})...", oem, v);
                         let _ = Command::new("pnputil")
                             .args(["/delete-driver", oem, "/uninstall", "/force"])
@@ -309,13 +284,19 @@ fn purge_stale_oem_packages() {
     }
 }
 
+/// Detects Intel Display Adapters across Ironlake (004x), Sandy/Ivy (01xx), and Haswell HD 4400/4600/5000 (04xx/0Axx/0Dxx).
 fn detect_intel_gpu_hardware_ids() -> Vec<String> {
     let mut hw_ids = Vec::new();
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     if let Ok(pci_enum) = hklm.open_subkey(r"SYSTEM\CurrentControlSet\Enum\PCI") {
         for dev_id in pci_enum.enum_keys().flatten() {
             let low = dev_id.to_lowercase();
-            if low.starts_with("ven_8086&dev_004") || low.starts_with("ven_8086&dev_01") {
+            let is_intel_igpu = low.starts_with("ven_8086&dev_004")
+                || low.starts_with("ven_8086&dev_01")
+                || low.starts_with("ven_8086&dev_04")
+                || low.starts_with("ven_8086&dev_0a")
+                || low.starts_with("ven_8086&dev_0d");
+            if is_intel_igpu {
                 if let Ok(dev_key) = pci_enum.open_subkey(&dev_id) {
                     for inst_id in dev_key.enum_keys().flatten() {
                         if let Ok(inst_key) = dev_key.open_subkey(&inst_id) {
@@ -332,6 +313,9 @@ fn detect_intel_gpu_hardware_ids() -> Vec<String> {
         }
     }
     if hw_ids.is_empty() {
+        hw_ids.push(r"PCI\VEN_8086&DEV_0A16".to_string());
+        hw_ids.push(r"PCI\VEN_8086&DEV_0416".to_string());
+        hw_ids.push(r"PCI\VEN_8086&DEV_041E".to_string());
         hw_ids.push(r"PCI\VEN_8086&DEV_0046".to_string());
         hw_ids.push(r"PCI\VEN_8086&DEV_0042".to_string());
     }
@@ -465,8 +449,8 @@ pub fn sign_and_install_driver(
             println!("[!] Direct PnP bind returned OS error: {}", last_err);
             print_recent_setupapi_errors();
             println!("\n[i] You can also finish binding in 10 seconds via:");
-            println!("    Device Manager -> Display adapters -> Microsoft Basic Display Adapter -> Update driver");
-            println!("    -> Browse my computer -> Let me pick -> Have Disk -> {}", clean_inf);
+            println!("    Device Manager -> Display adapters -> Update driver -> Browse my computer");
+            println!("    -> Let me pick -> Have Disk -> {}", clean_inf);
         }
     }
     Ok(())

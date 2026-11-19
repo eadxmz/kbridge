@@ -5,6 +5,7 @@ use crate::os_tweaks::apply_live_gpu_registry_flags;
 use anyhow::Result;
 use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
+use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -18,15 +19,70 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetForegroundWindow, GetWindowThreadProcessId, PeekMessageW,
-    TranslateMessage, EVENT_OBJECT_FOCUS, EVENT_SYSTEM_FOREGROUND, MSG, PM_REMOVE,
-    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    TranslateMessage, EVENT_SYSTEM_FOREGROUND, MSG, PM_REMOVE, WINEVENT_OUTOFCONTEXT,
 };
 
 const ENUM_CURRENT_SETTINGS: u32 = 0xFFFF_FFFF;
 const CDS_UPDATEREGISTRY: u32 = 0x0000_0001;
 const CDS_RESET: u32 = 0x4000_0000;
+const EVENT_OBJECT_FOCUS: u32 = 0x0000_8005;
+const WINEVENT_SKIPOWNPROCESS: u32 = 0x0000_0002;
+const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x0000_1000;
+const TOKEN_ADJUST_PRIVILEGES: u32 = 0x0020;
+const TOKEN_QUERY: u32 = 0x0008;
+const SE_PRIVILEGE_ENABLED: u32 = 0x0000_0002;
 
 static UI_EVENT_TRIGGERED: AtomicBool = AtomicBool::new(true);
+
+#[repr(C)]
+struct Luid {
+    low_part: u32,
+    high_part: i32,
+}
+
+#[repr(C)]
+struct LuidAndAttributes {
+    luid: Luid,
+    attributes: u32,
+}
+
+#[repr(C)]
+struct TokenPrivileges {
+    privilege_count: u32,
+    privileges: [LuidAndAttributes; 1],
+}
+
+#[link(name = "advapi32")]
+extern "system" {
+    fn OpenProcessToken(
+        ProcessHandle: *mut c_void,
+        DesiredAccess: u32,
+        TokenHandle: *mut *mut c_void,
+    ) -> i32;
+    fn LookupPrivilegeValueW(
+        lpSystemName: *const u16,
+        lpName: *const u16,
+        lpLuid: *mut Luid,
+    ) -> i32;
+    fn AdjustTokenPrivileges(
+        TokenHandle: *mut c_void,
+        DisableAllPrivileges: i32,
+        NewState: *const TokenPrivileges,
+        BufferLength: u32,
+        PreviousState: *mut c_void,
+        ReturnLength: *mut u32,
+    ) -> i32;
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn QueryFullProcessImageNameW(
+        hProcess: *mut c_void,
+        dwFlags: u32,
+        lpExeName: *mut u16,
+        lpdwSize: *mut u32,
+    ) -> i32;
+}
 
 #[link(name = "user32")]
 extern "system" {
@@ -63,6 +119,23 @@ extern "system" {
 const SYSTEM_MEMORY_LIST_INFORMATION: u32 = 80;
 const MEMORY_PURGE_STANDBY_LIST: u32 = 4;
 
+const MULTITHREADED_MEDIA_EXES: &[&str] = &[
+    "firefox.exe",
+    "chrome.exe",
+    "msedge.exe",
+    "brave.exe",
+    "opera.exe",
+    "vivaldi.exe",
+    "mpv.exe",
+    "vlc.exe",
+    "mpc-hc64.exe",
+    "mpc-hc.exe",
+    "mpc-be64.exe",
+    "potplayermini64.exe",
+    "wmplayer.exe",
+    "obs64.exe",
+];
+
 unsafe extern "system" fn win_event_callback(
     _h_win_event_hook: HWINEVENTHOOK,
     _event: u32,
@@ -73,6 +146,47 @@ unsafe extern "system" fn win_event_callback(
     _dwms_event_time: u32,
 ) {
     UI_EVENT_TRIGGERED.store(true, Ordering::SeqCst);
+}
+
+/// Grants `SeProfileSingleProcessPrivilege` so `NtSetSystemInformation(MemoryPurgeStandbyList)`
+/// executes in the kernel instead of silently returning STATUS_PRIVILEGE_NOT_HELD.
+fn enable_standby_purge_privilege() {
+    let priv_name: Vec<u16> = std::ffi::OsStr::new("SeProfileSingleProcessPrivilege")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        let mut h_token: *mut c_void = std::ptr::null_mut();
+        if OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &mut h_token,
+        ) != 0
+        {
+            let mut luid = Luid {
+                low_part: 0,
+                high_part: 0,
+            };
+            if LookupPrivilegeValueW(std::ptr::null(), priv_name.as_ptr(), &mut luid) != 0 {
+                let tp = TokenPrivileges {
+                    privilege_count: 1,
+                    privileges: [LuidAndAttributes {
+                        luid,
+                        attributes: SE_PRIVILEGE_ENABLED,
+                    }],
+                };
+                AdjustTokenPrivileges(
+                    h_token,
+                    0,
+                    &tp,
+                    size_of::<TokenPrivileges>() as u32,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+            }
+            CloseHandle(h_token);
+        }
+    }
 }
 
 pub fn lock_kernel_timer_05ms(enable: bool) {
@@ -138,7 +252,39 @@ pub fn switch_gpu_profile(overdrive: bool, color_cfg: &ColorConfig) -> Result<()
     Ok(())
 }
 
-pub fn boost_foreground_process(physical_core_mask: usize) {
+fn compute_cpu_affinity_masks() -> (usize, usize) {
+    let logical = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(64);
+    let all_mask = if logical >= usize::BITS as usize {
+        usize::MAX
+    } else {
+        (1usize << logical) - 1
+    };
+    let mut physical_mask = 0usize;
+    for i in (0..logical).step_by(2) {
+        physical_mask |= 1usize << i;
+    }
+    if physical_mask == 0 {
+        physical_mask = 1;
+    }
+    (all_mask, physical_mask)
+}
+
+fn is_multithreaded_media_or_browser(h_proc: *mut c_void) -> bool {
+    let mut buf = [0u16; 260];
+    let mut len = buf.len() as u32;
+    let ok = unsafe { QueryFullProcessImageNameW(h_proc, 0, buf.as_mut_ptr(), &mut len) };
+    if ok == 0 || len == 0 {
+        return false;
+    }
+    let full = String::from_utf16_lossy(&buf[..len as usize]).to_lowercase();
+    let exe = full.rsplit('\\').next().unwrap_or("");
+    MULTITHREADED_MEDIA_EXES.contains(&exe)
+}
+
+pub fn boost_foreground_process(all_cores_mask: usize, physical_core_mask: usize) {
     unsafe {
         let hwnd: HWND = GetForegroundWindow();
         if hwnd.is_null() {
@@ -149,10 +295,21 @@ pub fn boost_foreground_process(physical_core_mask: usize) {
         if pid == 0 || pid == std::process::id() {
             return;
         }
-        let h_proc = OpenProcess(PROCESS_SET_INFORMATION, 0, pid);
+        let h_proc = OpenProcess(
+            PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION,
+            0,
+            pid,
+        );
         if !h_proc.is_null() {
             let _ = SetPriorityClass(h_proc, HIGH_PRIORITY_CLASS);
-            let _ = SetProcessAffinityMask(h_proc, physical_core_mask);
+            // Browsers & video players get ALL logical threads for smooth 1440p60 decoding;
+            // games & single-thread apps get pinned to physical cores to avoid HT contention.
+            let target_mask = if is_multithreaded_media_or_browser(h_proc) {
+                all_cores_mask
+            } else {
+                physical_core_mask
+            };
+            let _ = SetProcessAffinityMask(h_proc, target_mask);
             CloseHandle(h_proc);
         }
     }
@@ -162,10 +319,11 @@ pub fn run_daemon_loop(fallback_color: ColorConfig) {
     unsafe {
         let _ = SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
     }
+    enable_standby_purge_privilege();
     lock_kernel_timer_05ms(true);
 
-    // Hook both top-level window switches (EVENT_SYSTEM_FOREGROUND) and internal tab/control
-    // focus changes (EVENT_OBJECT_FOCUS) so clicking "Display" inside Windows Settings triggers immediately.
+    let (all_cores_mask, physical_core_mask) = compute_cpu_affinity_masks();
+
     let hook_fg = unsafe {
         SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
@@ -192,6 +350,11 @@ pub fn run_daemon_loop(fallback_color: ColorConfig) {
 
     let mut last_purge = Instant::now() - Duration::from_secs(60);
     let mut last_fg_hwnd: isize = 0;
+    let mut follow_up_pulse_due: Option<Instant> = None;
+
+    // Initial immediate lock on boot
+    let init_color = read_intel_cui_color_from_registry().unwrap_or(fallback_color);
+    apply_gamma_ramp_force(&init_color);
 
     loop {
         unsafe {
@@ -205,19 +368,27 @@ pub fn run_daemon_loop(fallback_color: ColorConfig) {
         let cur_hwnd = unsafe { GetForegroundWindow() } as isize;
         if cur_hwnd != 0 && cur_hwnd != last_fg_hwnd {
             last_fg_hwnd = cur_hwnd;
-            boost_foreground_process(0b0101);
+            boost_foreground_process(all_cores_mask, physical_core_mask);
             UI_EVENT_TRIGGERED.store(true, Ordering::SeqCst);
         }
 
-        // Re-assert gamma/contrast with the 1-LSB win32k cache-buster so Settings -> Display
-        // can never revert your display LUT.
-        let _ = UI_EVENT_TRIGGERED.swap(false, Ordering::SeqCst);
-        let active_color = read_intel_cui_color_from_registry().unwrap_or(fallback_color);
-        apply_gamma_ramp_force(&active_color);
+        // Only push LUT on UI/focus events (plus one 450ms settle pulse for Settings -> Display)
+        // so uninterrupted fullscreen 1440p60 playback has ZERO periodic GDI calls.
+        if UI_EVENT_TRIGGERED.swap(false, Ordering::SeqCst) {
+            let active_color = read_intel_cui_color_from_registry().unwrap_or(fallback_color);
+            apply_gamma_ramp_force(&active_color);
+            follow_up_pulse_due = Some(Instant::now() + Duration::from_millis(450));
+        } else if let Some(due) = follow_up_pulse_due {
+            if Instant::now() >= due {
+                let active_color = read_intel_cui_color_from_registry().unwrap_or(fallback_color);
+                apply_gamma_ramp_force(&active_color);
+                follow_up_pulse_due = None;
+            }
+        }
 
         check_and_purge_standby_list(350, &mut last_purge);
 
-        thread::sleep(Duration::from_millis(400));
+        thread::sleep(Duration::from_millis(200));
     }
 
     #[allow(unreachable_code)]

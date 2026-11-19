@@ -5,10 +5,14 @@ use std::path::{Path, PathBuf};
 pub struct StrippedPackage {
     pub inf_path: PathBuf,
     pub orig_whql_cat: Option<PathBuf>,
+    pub is_haswell: bool,
 }
 
+/// Core WDDM 1.1 (Ironlake) + WDDM 1.3/2.0 (Haswell HD 4400) Runtime, DXVA2/D3D11VA & QuickSync Media DLLs
 const CORE_WDDM_FILES: &[&str] = &[
+    // Kernel Miniport
     "igdkmd64.sys",
+    // Ironlake (Gen 5 WDDM 1.1)
     "igdumd64.dll",
     "igdumd32.dll",
     "ig4icd64.dll",
@@ -19,9 +23,59 @@ const CORE_WDDM_FILES: &[&str] = &[
     "igdde32.dll",
     "igdumdx32.dll",
     "igfxress.dll",
+    // Haswell HD 4400 Family (Gen 7.5 WDDM 1.3 / 2.0) D3D9/10/11 + OpenGL + Shader Compiler
+    "igdumdim64.dll",
+    "igdumdim32.dll",
+    "igd10iumd64.dll",
+    "igd10iumd32.dll",
+    "igd11dxva64.dll",
+    "igd11dxva32.dll",
+    "igd12umd64.dll",
+    "igd12umd32.dll",
+    "igdusc64.dll",
+    "igdusc32.dll",
+    "igc64.dll",
+    "igc32.dll",
+    "ig75icd64.dll",
+    "ig75icd32.dll",
+    "ig8icd64.dll",
+    "ig8icd32.dll",
+    "igdail64.dll",
+    "igdail32.dll",
+    "igdmd64.dll",
+    "igdmd32.dll",
+    "igdfcl64.dll",
+    "igdfcl32.dll",
+    // Haswell Hardware Video Decode / Quick Sync / PAVP / C-for-Media (Critical for 1440p60)
+    "igfxcmrt64.dll",
+    "igfxcmrt32.dll",
+    "igfx11cmrt64.dll",
+    "igfx11cmrt32.dll",
+    "igfxcmjit64.dll",
+    "igfxcmjit32.dll",
+    "libmfxhw64.dll",
+    "libmfxhw32.dll",
+    "mfxplugin64_hw.dll",
+    "mfxplugin32_hw.dll",
+    "mfx_mft_h264ve_64.dll",
+    "mfx_mft_h264ve_32.dll",
+    "mfx_mft_vp8vd_64.dll",
+    "mfx_mft_vp8vd_32.dll",
+    "mfx_mft_vp9vd_64.dll",
+    "mfx_mft_vp9vd_32.dll",
+    "mfx_mft_mjpgvd_64.dll",
+    "mfx_mft_mjpgvd_32.dll",
+    "iglhcp64.dll",
+    "iglhcp32.dll",
+    "iglhsip64.dll",
+    "iglhsip32.dll",
+    "igfxexps.dll",
+    "igfxexps32.dll",
+    "igfxosp.dll",
 ];
 
 const OPTIONAL_UI_FILES: &[&str] = &[
+    // Legacy Ironlake Control Panel
     "gfxui.exe",
     "gfxui.exe.config",
     "igfxrenu.lrc",
@@ -31,7 +85,38 @@ const OPTIONAL_UI_FILES: &[&str] = &[
     "hccutils.dll",
     "icclibdll_x64.dll",
     "igfxcpl.cpl",
+    // Haswell Control Panel (On-demand UI, without background tray/hotkey bloat)
+    "gfxuiex.exe",
+    "gfxv4_0.exe",
+    "gfxv2_0.exe",
+    "gfxv4_0.exe.config",
+    "igfxdh.dll",
+    "igfxdi.dll",
+    "igfxdtcm.dll",
+    "igfxlhm.dll",
+    "igfxres.dll",
+    "gfxresources.dll",
 ];
+
+/// Reads an INF file transparently whether it is UTF-8, Windows-1252, or UTF-16LE (common in Haswell 15.40 INFs).
+pub fn read_inf_text(path: &Path) -> Result<String> {
+    let bytes = fs::read(path)?;
+    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
+        let u16s: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        return Ok(String::from_utf16_lossy(&u16s));
+    }
+    if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
+        let u16s: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        return Ok(String::from_utf16_lossy(&u16s));
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
 
 fn find_display_inf(dir: &Path) -> Option<PathBuf> {
     if let Ok(entries) = fs::read_dir(dir) {
@@ -43,8 +128,12 @@ fn find_display_inf(dir: &Path) -> Option<PathBuf> {
                 }
             } else if path.is_file() {
                 let fname = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
-                if fname.ends_with(".inf") && !fname.contains("intcdaud") && !fname.contains("autorun") {
-                    if let Ok(text) = fs::read_to_string(&path) {
+                if fname.ends_with(".inf")
+                    && !fname.contains("intcdaud")
+                    && !fname.contains("autorun")
+                    && !fname.contains("heci")
+                {
+                    if let Ok(text) = read_inf_text(&path) {
                         if text.contains("igdkmd64.sys") || text.contains("IntelGfx") {
                             return Some(path);
                         }
@@ -73,6 +162,23 @@ pub fn strip_driver_package(
         )
     })?;
 
+    let inf_text = read_inf_text(&src_inf)?;
+    let inf_low = inf_text.to_lowercase();
+    let is_haswell = inf_low.contains("igd10iumd64.dll")
+        || inf_low.contains("igdumdim64.dll")
+        || inf_low.contains("dev_0416")
+        || inf_low.contains("dev_0a16")
+        || inf_low.contains("dev_041e");
+
+    println!(
+        "[+] Detected Driver Architecture: {}",
+        if is_haswell {
+            "Haswell / HD Graphics 4400 Family (WDDM 1.3 / 2.0)"
+        } else {
+            "Ironlake / 1st-Gen Intel HD Graphics (WDDM 1.1)"
+        }
+    );
+
     let graphics_dir = src_inf.parent().unwrap_or(src_dir);
 
     for entry in fs::read_dir(graphics_dir)?.flatten() {
@@ -81,12 +187,33 @@ pub fn strip_driver_package(
             continue;
         }
         let fname = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+
+        // Always strip background bloatware even if a wildcard would match
+        if fname.starts_with("igfxpers")
+            || fname.starts_with("hkcmd")
+            || fname.starts_with("igfxsrvc")
+            || fname.starts_with("igfxtray")
+            || fname.starts_with("igfxem")
+            || fname.starts_with("igfxhk")
+            || fname.starts_with("igfxmtc")
+            || fname.contains("opencl")
+        {
+            continue;
+        }
+
         let is_coinstaller = fname.starts_with("igfxcoin") && fname.ends_with(".dll");
-        let is_microcode_blob = fname.ends_with(".bin") || fname.ends_with(".vp") || fname.ends_with(".cpa");
+        let is_microcode_blob = fname.ends_with(".bin")
+            || fname.ends_with(".vp")
+            || fname.ends_with(".cpa")
+            || fname.ends_with(".hex")
+            || fname.ends_with(".dat")
+            || fname.ends_with(".icm");
+        let is_mfx_media = is_haswell && fname.starts_with("mfx") && fname.ends_with(".dll");
 
         let should_keep = CORE_WDDM_FILES.contains(&fname.as_str())
             || is_coinstaller
             || is_microcode_blob
+            || is_mfx_media
             || (keep_ui && OPTIONAL_UI_FILES.contains(&fname.as_str()));
 
         if should_keep {
@@ -113,7 +240,7 @@ pub fn strip_driver_package(
     }
 
     let dst_inf = out_dir.join("igdlh64.inf");
-    fs::copy(&src_inf, &dst_inf)?;
+    fs::write(&dst_inf, &inf_text)?;
     println!(
         "[+] Imported display INF: {} -> igdlh64.inf",
         src_inf.file_name().unwrap().to_string_lossy()
@@ -129,5 +256,6 @@ pub fn strip_driver_package(
     Ok(StrippedPackage {
         inf_path: dst_inf,
         orig_whql_cat: found_cat,
+        is_haswell,
     })
 }

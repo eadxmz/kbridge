@@ -1,8 +1,8 @@
 [package]
 name = "kbridge"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
-description = "Intel HD Graphics (15.22.58.2993) Win10/11 Interactive Patcher & Invisible Daemon"
+description = "Intel HD Graphics (Ironlake + HD 4400) Ultimate Win10/11 Patcher & 1440p60 Anti-Stutter Daemon"
 build = "build.rs"
 
 [dependencies]

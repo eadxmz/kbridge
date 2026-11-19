@@ -89,10 +89,8 @@ pub fn build_gamma_ramp(cfg: &ColorConfig) -> GammaRamp {
     ramp
 }
 
-/// Forces Windows `win32kfull.sys` to send the LUT IOCTL to `igdkmd64.sys` even after
-/// Windows Settings -> Display resets the hardware LUT behind GDI's back.
-/// Flipping bit 0 (`1/65535`) bypasses `win32k`'s `RtlCompareMemory` cache check while mapping
-/// to the exact same 8-bit/10-bit hardware register (`val >> 8`), causing zero visual flicker.
+/// Forces `win32kfull.sys` to send the LUT IOCTL to `igdkmd64.sys` by toggling bit 0 (`1/65535`)
+/// of `blue[255]`, preventing Windows Settings -> Display from reverting gamma/contrast with zero flicker.
 pub fn apply_gamma_ramp_force(cfg: &ColorConfig) -> bool {
     let mut target = build_gamma_ramp(cfg);
     let bit = CACHE_BUSTER_BIT.fetch_xor(1, Ordering::Relaxed) & 1;

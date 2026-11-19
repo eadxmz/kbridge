@@ -1,8 +1,8 @@
-# kbridge
+# kbridge v0.5.0
 
-Interactive menu-driven Rust driver patcher, INF modifier, native catalog generator, and invisible anti-stutter background daemon for Intel HD Graphics (15.22.58.2993) on Windows 10 and Windows 11.
+Ultimate multi-generation Rust driver patcher, INF modifier, native WinTrust catalog signer, and invisible anti-stutter daemon for **1st-Gen Intel HD Graphics (Ironlake `15.22.58.2993`)** and **4th-Gen Intel HD Graphics 4400 Family (Haswell `15.36` / `15.40`)** on Windows 10 and Windows 11.
 
-## Key Features (`v0.4.1`)
-- **Invisible & Instant Boot Daemon**: Detaches from the console via `FreeConsole()` and `CREATE_NO_WINDOW` (zero Command Prompt windows on screen) and registers a `<Priority>0</Priority>` Windows Logon task that executes immediately at boot before the desktop finishes loading.
-- **Settings -> Display LUT Lock (`win32k` Cache-Buster)**: Toggles 1 LSB (`1/65535`) in the 16-bit GDI gamma ramp so `win32kfull.sys` never skips updating the hardware DAC when Windows 11 **Settings -> Display** resets the LUT via DXGI.
-- **Anti-Stutter Frame Pacing**: Event-driven `SetWinEventHook`, 60-second Standby RAM purge cooldown, DWM `OverlayTestMode = 5`, MMCSS `GPU Priority = 8`, and `powercfg` PCIe ASPM off + 100% min CPU state.
+## Quick Start
+1. **Option [1]**: Point to your extracted Ironlake or Haswell HD 4400 driver folder. Auto-detects generation, preserves all WDDM + DXVA2/QuickSync media DLLs, strips telemetry/bloatware, bakes 25+ performance/media DWORDs, builds and signs `igdlh.cat` in Normal Mode (No Test Mode), and binds onto your Intel GPU.
+2. **Option [3]**: Applies maximum OS, DXGKrnl, MMCSS Playback/Games, 512MB GMM, core-unparking, dynamic-tick, and IRQ tweaks, and launches the invisible Priority-0 startup daemon.
+3. **Option [7]** *(Optional)*: Tunes your Firefox profile (`user.js`) for smooth hardware-accelerated 1440p60 playback.

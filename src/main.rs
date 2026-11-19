@@ -1,3 +1,4 @@
+mod browser;
 mod color;
 mod daemon;
 mod inf_mod;
@@ -38,8 +39,10 @@ fn resolve_driver_input_path() -> Option<PathBuf> {
     let default_candidates = [
         r".\win7vista_64_152258",
         r".\win64_152258",
+        r".\win64_1540",
+        r".\win64_1536",
         r"C:\win7vista_64_152258",
-        r"C:\win64_152258",
+        r"C:\win64_1540",
     ];
     for cand in &default_candidates {
         if Path::new(cand).exists() {
@@ -53,7 +56,7 @@ fn resolve_driver_input_path() -> Option<PathBuf> {
         }
     }
 
-    let raw = prompt("Enter or drag-and-drop extracted Intel 15.22.58.2993 folder path: ");
+    let raw = prompt("Enter or drag-and-drop extracted Intel driver folder (Ironlake 15.22 or Haswell HD 4400 15.36/15.40): ");
     let cleaned = raw.trim_matches('"').trim();
     if cleaned.is_empty() {
         return None;
@@ -79,16 +82,16 @@ fn run_driver_workflow(install_now: bool) -> Result<()> {
         PathBuf::from(out_raw.trim_matches('"').trim())
     };
 
-    let ui_ans = prompt("Keep Intel Control Panel UI (GfxUI.exe - 0 MB idle RAM)? [Y/n]: ");
+    let ui_ans = prompt("Keep Intel Control Panel UI (GfxUI / GfxUIEx - 0 MB idle RAM)? [Y/n]: ");
     let keep_ui = ui_ans.is_empty() || ui_ans.eq_ignore_ascii_case("y");
 
-    println!("\n[*] Scanning package, stripping bloatware & keeping core WDDM files...");
+    println!("\n[*] Scanning package, detecting GPU generation & preserving core WDDM + Media files...");
     let pkg = patcher::strip_driver_package(&input_dir, &out_dir, keep_ui)?;
 
-    println!("[*] Unlocking Windows 10/11 target, cloning NTamd64.6.0 models & baking 11 DWORDs...");
-    inf_mod::patch_inf_for_win10_11(&pkg.inf_path, &out_dir, keep_ui)?;
+    println!("[*] Patching INF for Win10/11, clearing ExcludeFromSelect & baking 25+ Max Performance DWORDs...");
+    inf_mod::patch_inf_for_win10_11(&pkg.inf_path, &out_dir, keep_ui, pkg.is_haswell)?;
 
-    println!("[*] Signing catalog & binding driver onto Intel HD Graphics...");
+    println!("[*] Building & signing security catalog in Normal Mode (No Test Mode required)...");
     signer::sign_and_install_driver(&out_dir, pkg.orig_whql_cat.as_deref(), false, install_now)?;
 
     color::disable_windows_color_conflicts();
@@ -96,7 +99,7 @@ fn run_driver_workflow(install_now: bool) -> Result<()> {
     if !install_now {
         println!("[i] Next: Run Option [1] to install directly, or install via Device Manager -> Have Disk.");
     } else {
-        println!("[i] Next: Reboot if prompted, then run Option [3] to apply anti-stutter OS & invisible daemon tweaks.");
+        println!("[i] Next: Reboot if prompted, then run Option [3] to apply MAX 1440p60 OS & Daemon tweaks.");
     }
     Ok(())
 }
@@ -104,16 +107,18 @@ fn run_driver_workflow(install_now: bool) -> Result<()> {
 fn run_display_preset_menu() {
     println!("\n--- Display Resolution & Gamma Presets ---");
     println!("  [1] Native 1366x768  | Balanced Color (Gamma 1.08, Contrast 1.05)");
-    println!("  [2] Gaming 1024x576  | 16:9 Scaled + Vibrance (Gamma 1.18, Contrast 1.10)");
-    println!("  [3] Ultra  960x540   | 16:9 Scaled + Vibrance (Gamma 1.22, Contrast 1.12)");
-    println!("  [4] Custom Resolution & Gamma");
-    let choice = prompt("Select preset [1-4]: ");
+    println!("  [2] FullHD 1920x1080 | Crisp Color    (Gamma 1.06, Contrast 1.04)");
+    println!("  [3] Gaming 1024x576  | 16:9 Scaled + Vibrance (Gamma 1.18, Contrast 1.10)");
+    println!("  [4] Ultra  960x540   | 16:9 Scaled + Vibrance (Gamma 1.22, Contrast 1.12)");
+    println!("  [5] Custom Resolution & Gamma");
+    let choice = prompt("Select preset [1-5]: ");
 
     let (w, h, gamma, contrast) = match choice.as_str() {
         "1" => (1366, 768, 1.08, 1.05),
-        "2" => (1024, 576, 1.18, 1.10),
-        "3" => (960, 540, 1.22, 1.12),
-        "4" => {
+        "2" => (1920, 1080, 1.06, 1.04),
+        "3" => (1024, 576, 1.18, 1.10),
+        "4" => (960, 540, 1.22, 1.12),
+        "5" => {
             let w: u32 = prompt("Width (e.g. 1366): ").parse().unwrap_or(1366);
             let h: u32 = prompt("Height (e.g. 768): ").parse().unwrap_or(768);
             let g: f32 = prompt("Gamma (e.g. 1.12): ").parse().unwrap_or(1.12);
@@ -139,8 +144,6 @@ fn run_display_preset_menu() {
     }
 }
 
-/// Registers KBridgeOptDaemon with Priority 0 (Realtime Logon Priority, 0s Delay, Hidden)
-/// so it executes the exact millisecond Windows logs in without opening any console window.
 fn register_instant_hidden_startup_task(exe_path: &Path, gamma: f32, contrast: f32) -> Result<()> {
     let ps_script = format!(
         r#"
@@ -163,7 +166,6 @@ fn register_instant_hidden_startup_task(exe_path: &Path, gamma: f32, contrast: f
     if status.success() {
         println!("[+] Registered instant Priority-0 hidden startup task (KBridgeOptDaemon).");
     } else {
-        // Fallback to schtasks if PowerShell cmdlets are stripped on tiny Windows builds
         let _ = Command::new("schtasks")
             .args([
                 "/Create",
@@ -188,11 +190,8 @@ fn register_instant_hidden_startup_task(exe_path: &Path, gamma: f32, contrast: f
     Ok(())
 }
 
-/// Spawns `kbridge.exe --daemon` as a completely headless, windowless background process
-/// so the interactive menu returns immediately and no Command Prompt window stays open.
 fn spawn_headless_daemon_now(exe_path: &Path, gamma: f32, contrast: f32) -> Result<()> {
     let my_pid = std::process::id();
-    // Terminate any previous background kbridge.exe instance first
     let _ = Command::new("taskkill")
         .args([
             "/F",
@@ -215,13 +214,13 @@ fn spawn_headless_daemon_now(exe_path: &Path, gamma: f32, contrast: f32) -> Resu
         .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
         .spawn()?;
 
-    println!("[+] KBridge Background Guard is now running invisibly in the background (0 windows)!");
+    println!("[+] KBridge v0.5.0 Guard is now running invisibly in the background (0 windows)!");
+    println!("[i] Browsers & media players get HIGH priority on ALL cores; games get pinned to physical cores.");
     Ok(())
 }
 
 fn setup_and_run_daemon(register_startup: bool) -> Result<()> {
-    println!("\n--- Invisible Color Guard & Anti-Stutter Daemon Setup ---");
-    println!("[i] Locks your Gamma/Contrast (even inside Windows Settings -> Display) with zero open windows.");
+    println!("\n--- Invisible 1440p60 Guard & Color LUT Lock Setup ---");
     let g_str = prompt("Desired Gamma [default: 1.08]: ");
     let gamma: f32 = if g_str.is_empty() {
         1.08
@@ -286,7 +285,6 @@ fn parse_background_daemon_args() -> Option<ColorConfig> {
 }
 
 fn main() -> Result<()> {
-    // If launched with `--daemon`, immediately detach and destroy any console window
     if let Some(bg_cfg) = parse_background_daemon_args() {
         unsafe {
             FreeConsole();
@@ -296,26 +294,35 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let (_, is_haswell) = os_tweaks::detect_active_intel_gpu_class_key();
+    let gpu_label = if is_haswell {
+        "Haswell HD 4400 Family (Gen 7.5)"
+    } else {
+        "Ironlake HD Graphics (1st-Gen)"
+    };
+
     loop {
-        println!("\n==================================================================");
-        println!("  KBridge v0.4.1 - Intel HD Graphics (15.22.58.2993) Optimizer");
-        println!("==================================================================");
-        println!("  --- STEP 1: DRIVER PATCH & INSTALL ---");
-        println!("  [1] Patch, Sign & Install Driver (Normal Mode - No Test Mode)");
+        println!("\n======================================================================");
+        println!("  KBridge v0.5.0 ULTIMATE - Intel HD Graphics Win10/11 Optimizer");
+        println!("  Detected Active GPU: {}", gpu_label);
+        println!("======================================================================");
+        println!("  --- STEP 1: MULTI-GEN DRIVER PATCH & INSTALL ---");
+        println!("  [1] Patch, Sign & Install Driver (Ironlake & HD 4400 - No Test Mode)");
         println!("  [2] Patch & Sign Driver Only (Export folder without installing)");
         println!();
-        println!("  --- STEP 2: RUN ONCE AFTER DRIVER INSTALL (ANTI-STUTTER) ---");
-        println!("  [3] Apply Win10/11 Anti-Stutter Tweaks + Enable Invisible Guard");
+        println!("  --- STEP 2: RUN ONCE AFTER DRIVER INSTALL (MAX 1440p60 TWEAKS) ---");
+        println!("  [3] Apply ALL Max GPU/OS/Kernel/Power Tweaks + Invisible Guard");
         println!();
-        println!("  --- OPTIONAL DAILY TOGGLES (USE ANYTIME) ---");
-        println!("  [4] GPU Mode: OVERDRIVE (Lock Max Clocks, RC6 Off - Best FPS)");
-        println!("  [5] GPU Mode: ECO (Stock Clocks, Power Saving - Cooler/Battery)");
+        println!("  --- OPTIONAL TOOLS & DAILY TOGGLES ---");
+        println!("  [4] GPU Mode: OVERDRIVE (RP0 Boost, RC6/DPST/PSR Off, 512MB GMM)");
+        println!("  [5] GPU Mode: ECO (Stock Clocks, Power Saving - Battery/Cool)");
         println!("  [6] Change Display Resolution & Gamma Preset");
-        println!("  [7] Start Invisible Background Guard Now (This Session Only)");
+        println!("  [7] Apply 1440p60 Firefox Hardware-Decode Profile (user.js)");
+        println!("  [8] Start Invisible Background Guard Now (This Session Only)");
         println!("  [0] Exit");
-        println!("==================================================================");
+        println!("======================================================================");
 
-        let choice = prompt("Select an option [0-7]: ");
+        let choice = prompt("Select an option [0-8]: ");
         let res: Result<()> = match choice.as_str() {
             "1" => run_driver_workflow(true),
             "2" => run_driver_workflow(false),
@@ -327,7 +334,7 @@ fn main() -> Result<()> {
             }
             "4" => {
                 daemon::switch_gpu_profile(true, &ColorConfig::default())?;
-                println!("[+] Live GPU profile set to OVERDRIVE (RP0 locked, RC6 disabled).");
+                println!("[+] Live GPU profile set to OVERDRIVE (RP0 locked, RC6/DPST/PSR off).");
                 Ok(())
             }
             "5" => {
@@ -339,10 +346,14 @@ fn main() -> Result<()> {
                 run_display_preset_menu();
                 Ok(())
             }
-            "7" => setup_and_run_daemon(false),
+            "7" => {
+                browser::apply_firefox_1440p60_tweaks(is_haswell)?;
+                Ok(())
+            }
+            "8" => setup_and_run_daemon(false),
             "0" => break,
             _ => {
-                println!("[!] Invalid option. Please enter a number between 0 and 7.");
+                println!("[!] Invalid option. Please enter a number between 0 and 8.");
                 Ok(())
             }
         };
