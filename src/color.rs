@@ -89,8 +89,6 @@ pub fn build_gamma_ramp(cfg: &ColorConfig) -> GammaRamp {
     ramp
 }
 
-/// Forces `win32kfull.sys` to send the LUT IOCTL to `igdkmd64.sys` by toggling bit 0 (`1/65535`)
-/// of `blue[255]`, preventing Windows Settings -> Display from reverting gamma/contrast with zero flicker.
 pub fn apply_gamma_ramp_force(cfg: &ColorConfig) -> bool {
     let mut target = build_gamma_ramp(cfg);
     let bit = CACHE_BUSTER_BIT.fetch_xor(1, Ordering::Relaxed) & 1;

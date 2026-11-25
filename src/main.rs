@@ -1,6 +1,7 @@
 mod browser;
 mod color;
 mod daemon;
+mod framegen;
 mod inf_mod;
 mod os_tweaks;
 mod patcher;
@@ -8,6 +9,7 @@ mod signer;
 
 use anyhow::Result;
 use color::ColorConfig;
+use framegen::{FrameGenMode, LatencyMode};
 use std::env;
 use std::io::{self, Write};
 use std::os::windows::process::CommandExt;
@@ -102,6 +104,31 @@ fn run_driver_workflow(install_now: bool) -> Result<()> {
         println!("[i] Next: Reboot if prompted, then run Option [3] to apply MAX 1440p60 OS & Daemon tweaks.");
     }
     Ok(())
+}
+
+fn run_framegen_menu() -> Result<()> {
+    println!("\n--- KBridge Dual-GPU Offload Frame Gen (Intel HD 4400 Only) ---");
+    println!("  Select Optical Flow Engine:");
+    println!("  [1] Pyramid Optical Flow (2x — Best 3D Games, Coarse 1/8 -> Fine 1/4 + HUD Lock)");
+    println!("  [2] Ultra-Lite Lucas-Kanade (2x — Single-Pass PS 4.0, Lowest GPU Load)");
+    println!("  [3] Adaptive Video Smoother (24/30 -> 60 fps — Scene-Cut Guard for YouTube/Anime)");
+    let m_choice = prompt("Select engine [1-3, default 1]: ");
+    let mode = match m_choice.as_str() {
+        "2" => FrameGenMode::UltraLiteLucasKanade,
+        "3" => FrameGenMode::AdaptiveVideoSmoother,
+        _ => FrameGenMode::PyramidOpticalFlow,
+    };
+
+    println!("\n  Select Input Latency Technique:");
+    println!("  [1] ZeroLag-X Extrapolation (0-Frame Hold + Mouse-Delta Assist — Ultra-Low Latency)");
+    println!("  [2] Classic Interpolation   (1-Frame Hold — Smoothest Motion for Movies/Slow Games)");
+    let l_choice = prompt("Select latency mode [1-2, default 1]: ");
+    let latency = match l_choice.as_str() {
+        "2" => LatencyMode::ClassicInterpolation,
+        _ => LatencyMode::ZeroLagExtrapolation,
+    };
+
+    framegen::run_hd4400_framegen(mode, latency)
 }
 
 fn run_display_preset_menu() {
@@ -214,8 +241,7 @@ fn spawn_headless_daemon_now(exe_path: &Path, gamma: f32, contrast: f32) -> Resu
         .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
         .spawn()?;
 
-    println!("[+] KBridge v0.5.0 Guard is now running invisibly in the background (0 windows)!");
-    println!("[i] Browsers & media players get HIGH priority on ALL cores; games get pinned to physical cores.");
+    println!("[+] KBridge v0.6.0 Guard is now running invisibly in the background (0 windows)!");
     Ok(())
 }
 
@@ -296,14 +322,14 @@ fn main() -> Result<()> {
 
     let (_, is_haswell) = os_tweaks::detect_active_intel_gpu_class_key();
     let gpu_label = if is_haswell {
-        "Haswell HD 4400 Family (Gen 7.5)"
+        "Haswell HD 4400 Family (Gen 7.5 — Frame Gen Ready)"
     } else {
         "Ironlake HD Graphics (1st-Gen)"
     };
 
     loop {
         println!("\n======================================================================");
-        println!("  KBridge v0.5.0 ULTIMATE - Intel HD Graphics Win10/11 Optimizer");
+        println!("  KBridge v0.6.0 ULTIMATE - Intel HD Graphics + ZeroLag-X Frame Gen");
         println!("  Detected Active GPU: {}", gpu_label);
         println!("======================================================================");
         println!("  --- STEP 1: MULTI-GEN DRIVER PATCH & INSTALL ---");
@@ -313,16 +339,17 @@ fn main() -> Result<()> {
         println!("  --- STEP 2: RUN ONCE AFTER DRIVER INSTALL (MAX 1440p60 TWEAKS) ---");
         println!("  [3] Apply ALL Max GPU/OS/Kernel/Power Tweaks + Invisible Guard");
         println!();
-        println!("  --- OPTIONAL TOOLS & DAILY TOGGLES ---");
+        println!("  --- FRAME GENERATION & DAILY TOOLS ---");
         println!("  [4] GPU Mode: OVERDRIVE (RP0 Boost, RC6/DPST/PSR Off, 512MB GMM)");
         println!("  [5] GPU Mode: ECO (Stock Clocks, Power Saving - Battery/Cool)");
         println!("  [6] Change Display Resolution & Gamma Preset");
         println!("  [7] Apply 1440p60 Firefox Hardware-Decode Profile (user.js)");
         println!("  [8] Start Invisible Background Guard Now (This Session Only)");
+        println!("  [9] Launch HD 4400 Dual-GPU Frame Gen (ZeroLag-X / Pyramid / LK / Video)");
         println!("  [0] Exit");
         println!("======================================================================");
 
-        let choice = prompt("Select an option [0-8]: ");
+        let choice = prompt("Select an option [0-9]: ");
         let res: Result<()> = match choice.as_str() {
             "1" => run_driver_workflow(true),
             "2" => run_driver_workflow(false),
@@ -351,9 +378,10 @@ fn main() -> Result<()> {
                 Ok(())
             }
             "8" => setup_and_run_daemon(false),
+            "9" => run_framegen_menu(),
             "0" => break,
             _ => {
-                println!("[!] Invalid option. Please enter a number between 0 and 8.");
+                println!("[!] Invalid option. Please enter a number between 0 and 9.");
                 Ok(())
             }
         };

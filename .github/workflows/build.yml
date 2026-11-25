@@ -34,9 +34,9 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.5.0-latest
-          name: "KBridge v0.5.0 Ultimate (Ironlake + HD 4400)"
-          body: "v0.5.0 multi-gen release: full Ironlake (15.22.58.2993) + Haswell HD Graphics 4400 (15.36/15.40) support, UTF-16LE INF parser, 25+ GPU/media/DPST/PSR flags, 512MB GMM unlock, MMCSS Playback+Games GPU Priority 8, 100% core unparking, Intel Graphics Power Plan unlock, SeProfileSingleProcessPrivilege Standby RAM purge, all-core browser/media booster for 1440p60, and Firefox user.js tuner."
+          tag_name: v0.6.0-latest
+          name: "KBridge v0.6.0 Ultimate + HD 4400 Dual-GPU ZeroLag-X Frame Gen"
+          body: "v0.6.0 release: adds custom Dual-GPU Offload D3D11 2x Frame Generation locked exclusively to Intel HD Graphics 4400 (Pyramid Optical Flow, Ultra-Lite Lucas-Kanade PS 4.0, Adaptive Video Smoother) + custom ZeroLag-X Predictive Extrapolation with live mouse-delta camera vector injection and 1-frame waitable flip queue."
           prerelease: false
           files: |
             target/release/kbridge.exe

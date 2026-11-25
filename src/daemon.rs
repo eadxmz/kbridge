@@ -148,8 +148,6 @@ unsafe extern "system" fn win_event_callback(
     UI_EVENT_TRIGGERED.store(true, Ordering::SeqCst);
 }
 
-/// Grants `SeProfileSingleProcessPrivilege` so `NtSetSystemInformation(MemoryPurgeStandbyList)`
-/// executes in the kernel instead of silently returning STATUS_PRIVILEGE_NOT_HELD.
 fn enable_standby_purge_privilege() {
     let priv_name: Vec<u16> = std::ffi::OsStr::new("SeProfileSingleProcessPrivilege")
         .encode_wide()
@@ -302,8 +300,6 @@ pub fn boost_foreground_process(all_cores_mask: usize, physical_core_mask: usize
         );
         if !h_proc.is_null() {
             let _ = SetPriorityClass(h_proc, HIGH_PRIORITY_CLASS);
-            // Browsers & video players get ALL logical threads for smooth 1440p60 decoding;
-            // games & single-thread apps get pinned to physical cores to avoid HT contention.
             let target_mask = if is_multithreaded_media_or_browser(h_proc) {
                 all_cores_mask
             } else {
@@ -352,7 +348,6 @@ pub fn run_daemon_loop(fallback_color: ColorConfig) {
     let mut last_fg_hwnd: isize = 0;
     let mut follow_up_pulse_due: Option<Instant> = None;
 
-    // Initial immediate lock on boot
     let init_color = read_intel_cui_color_from_registry().unwrap_or(fallback_color);
     apply_gamma_ramp_force(&init_color);
 
@@ -372,8 +367,6 @@ pub fn run_daemon_loop(fallback_color: ColorConfig) {
             UI_EVENT_TRIGGERED.store(true, Ordering::SeqCst);
         }
 
-        // Only push LUT on UI/focus events (plus one 450ms settle pulse for Settings -> Display)
-        // so uninterrupted fullscreen 1440p60 playback has ZERO periodic GDI calls.
         if UI_EVENT_TRIGGERED.swap(false, Ordering::SeqCst) {
             let active_color = read_intel_cui_color_from_registry().unwrap_or(fallback_color);
             apply_gamma_ramp_force(&active_color);

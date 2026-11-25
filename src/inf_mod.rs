@@ -5,7 +5,6 @@ use std::fs;
 use std::path::Path;
 
 const HARDCODED_INF_DWORDS_COMMON: &[(&str, u32)] = &[
-    // Clock, Render Boost & Power Gating
     ("DisableDynamicClocking", 1),
     ("ForceRenderPState", 0),
     ("RC6Enable", 0),
@@ -18,13 +17,11 @@ const HARDCODED_INF_DWORDS_COMMON: &[(&str, u32)] = &[
     ("Disable_PSR", 1),
     ("PsrDisable", 1),
     ("FeatureTestControl", 0x0000_9240),
-    // Memory, GTT & VRAM Allocation
     ("IncreaseFixedSegment", 1),
     ("ForceGTTCacheable", 1),
     ("DisableTiledMemory", 0),
     ("EnableDynamicMemoryAllocation", 1),
     ("GttSize", 512),
-    // 1440p60 Media Pipeline & Low-Latency Render
     ("Disable_OverlayDSQualityEnhancement", 1),
     ("DisableVideoPostProcessing", 1),
     ("SmoothVideo", 0),
@@ -38,14 +35,14 @@ const HARDCODED_INF_DWORDS_COMMON: &[(&str, u32)] = &[
 ];
 
 const HASWELL_EXTRA_DWORDS: &[(&str, u32)] = &[
-    ("TotalStaticVRAM", 1_073_741_824), // 1 GB virtual dedicated report for Haswell HD 4400
-    ("EnableVP9HybridDecode", 1),       // Hardware-assisted VP9 decode on Haswell 15.40
-    ("ShaderCache", 1),                 // Eliminates D3D11/OpenGL shader compile stutter
+    ("TotalStaticVRAM", 1_073_741_824),
+    ("EnableVP9HybridDecode", 1),
+    ("ShaderCache", 1),
     ("EnableHardwareScheduling", 1),
 ];
 
 const IRONLAKE_EXTRA_DWORDS: &[(&str, u32)] = &[
-    ("TotalStaticVRAM", 536_870_912), // 512 MB static report for Ironlake
+    ("TotalStaticVRAM", 536_870_912),
 ];
 
 pub fn patch_inf_for_win10_11(
@@ -67,7 +64,6 @@ pub fn patch_inf_for_win10_11(
         }
     }
 
-    // PASS 1: Collect CopyFiles sections & all PCI\VEN_8086 device models from any [IntelGfx.NTamd64*] section
     let mut copy_sections: HashSet<String> = HashSet::new();
     let mut captured_device_lines: Vec<String> = Vec::new();
     let mut seen_models: HashSet<String> = HashSet::new();
@@ -113,7 +109,6 @@ pub fn patch_inf_for_win10_11(
 
     let model_count = captured_device_lines.len();
 
-    // PASS 2: Rewrite INF cleanly
     let mut out_lines: Vec<String> = Vec::new();
     let mut current_section = String::new();
     let mut emitted_nt10_section = already_has_nt10;
@@ -221,11 +216,10 @@ pub fn patch_inf_for_win10_11(
 
         out_lines.push(line.to_string());
 
-        // Inject DWORDs into [igfx_SoftwareDeviceSettings] or [SoftBIOS_AddReg] / Haswell software device settings
         let is_sw_settings = current_section == "igfx_softwaredevicesettings"
             || current_section.ends_with("_softwaredevicesettings");
         if is_sw_settings && !injected_dwords {
-            out_lines.push("; --- KBridge v0.5.0 Ultimate Performance & 1440p60 Media Flags ---".to_string());
+            out_lines.push("; --- KBridge v0.6.0 Ultimate Performance & 1440p60 Media Flags ---".to_string());
             for (key, val) in HARDCODED_INF_DWORDS_COMMON {
                 out_lines.push(format!("HKR,,\"{}\",%REG_DWORD%,0x{:08X}", key, val));
             }

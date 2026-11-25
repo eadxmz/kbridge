@@ -8,11 +8,8 @@ pub struct StrippedPackage {
     pub is_haswell: bool,
 }
 
-/// Core WDDM 1.1 (Ironlake) + WDDM 1.3/2.0 (Haswell HD 4400) Runtime, DXVA2/D3D11VA & QuickSync Media DLLs
 const CORE_WDDM_FILES: &[&str] = &[
-    // Kernel Miniport
     "igdkmd64.sys",
-    // Ironlake (Gen 5 WDDM 1.1)
     "igdumd64.dll",
     "igdumd32.dll",
     "ig4icd64.dll",
@@ -23,7 +20,6 @@ const CORE_WDDM_FILES: &[&str] = &[
     "igdde32.dll",
     "igdumdx32.dll",
     "igfxress.dll",
-    // Haswell HD 4400 Family (Gen 7.5 WDDM 1.3 / 2.0) D3D9/10/11 + OpenGL + Shader Compiler
     "igdumdim64.dll",
     "igdumdim32.dll",
     "igd10iumd64.dll",
@@ -46,7 +42,6 @@ const CORE_WDDM_FILES: &[&str] = &[
     "igdmd32.dll",
     "igdfcl64.dll",
     "igdfcl32.dll",
-    // Haswell Hardware Video Decode / Quick Sync / PAVP / C-for-Media (Critical for 1440p60)
     "igfxcmrt64.dll",
     "igfxcmrt32.dll",
     "igfx11cmrt64.dll",
@@ -75,7 +70,6 @@ const CORE_WDDM_FILES: &[&str] = &[
 ];
 
 const OPTIONAL_UI_FILES: &[&str] = &[
-    // Legacy Ironlake Control Panel
     "gfxui.exe",
     "gfxui.exe.config",
     "igfxrenu.lrc",
@@ -85,7 +79,6 @@ const OPTIONAL_UI_FILES: &[&str] = &[
     "hccutils.dll",
     "icclibdll_x64.dll",
     "igfxcpl.cpl",
-    // Haswell Control Panel (On-demand UI, without background tray/hotkey bloat)
     "gfxuiex.exe",
     "gfxv4_0.exe",
     "gfxv2_0.exe",
@@ -98,7 +91,6 @@ const OPTIONAL_UI_FILES: &[&str] = &[
     "gfxresources.dll",
 ];
 
-/// Reads an INF file transparently whether it is UTF-8, Windows-1252, or UTF-16LE (common in Haswell 15.40 INFs).
 pub fn read_inf_text(path: &Path) -> Result<String> {
     let bytes = fs::read(path)?;
     if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
@@ -188,7 +180,6 @@ pub fn strip_driver_package(
         }
         let fname = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
 
-        // Always strip background bloatware even if a wildcard would match
         if fname.starts_with("igfxpers")
             || fname.starts_with("hkcmd")
             || fname.starts_with("igfxsrvc")

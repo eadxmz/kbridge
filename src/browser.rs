@@ -3,7 +3,6 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-/// Auto-configures Firefox profiles (`user.js`) for low-overhead 1440p60 hardware video decoding.
 pub fn apply_firefox_1440p60_tweaks(is_haswell: bool) -> Result<()> {
     let Ok(appdata) = env::var("APPDATA") else {
         println!("[!] APPDATA environment variable not found.");
@@ -16,10 +15,9 @@ pub fn apply_firefox_1440p60_tweaks(is_haswell: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Haswell (WDDM 1.3/2.0) supports hardware WebRender + DXVA2; Ironlake (WDDM 1.1) avoids DirectComposition stalls
     let dcomp_val = if is_haswell { "true" } else { "false" };
     let user_js_block = format!(
-        r#"// --- KBridge v0.5.0 1440p60 Hardware Video & Frame-Pacing Tweaks ---
+        r#"// --- KBridge v0.6.0 1440p60 Hardware Video & Frame-Pacing Tweaks ---
 user_pref("media.hardware-video-decoding.enabled", true);
 user_pref("media.hardware-video-decoding.force-enabled", true);
 user_pref("media.wmf.dxva.enabled", true);
@@ -44,7 +42,7 @@ user_pref("media.cache_resume_threshold", 90);
         if path.is_dir() && path.join("prefs.js").exists() {
             let target = path.join("user.js");
             let mut existing = fs::read_to_string(&target).unwrap_or_default();
-            if !existing.contains("KBridge v0.5.0 1440p60") {
+            if !existing.contains("KBridge v0.6.0 1440p60") {
                 if !existing.is_empty() && !existing.ends_with('\n') {
                     existing.push('\n');
                 }

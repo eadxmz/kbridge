@@ -6,8 +6,6 @@ use winreg::RegKey;
 const DISPLAY_CLASS_ROOT: &str =
     r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
 
-/// Dynamically finds the exact Display Adapter subkey (`0000`, `0001`, etc.) belonging to Intel (`VEN_8086`)
-/// and detects whether it is Haswell (HD 4400 family) or Ironlake (1st-Gen).
 pub fn detect_active_intel_gpu_class_key() -> (String, bool) {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     if let Ok(class_root) = hklm.open_subkey(DISPLAY_CLASS_ROOT) {
@@ -45,7 +43,6 @@ pub fn apply_live_gpu_registry_flags(overdrive: bool) -> Result<()> {
         (0u32, 1u32, 1u32, 1u32, 1u32)
     };
 
-    // Clocks, Render P-States, DPST & PSR
     gpu_key.set_value("DisableDynamicClocking", &dyn_clock)?;
     gpu_key.set_value("ForceRenderPState", &0u32)?;
     gpu_key.set_value("RC6Enable", &rc6)?;
@@ -59,7 +56,6 @@ pub fn apply_live_gpu_registry_flags(overdrive: bool) -> Result<()> {
     gpu_key.set_value("PsrDisable", &1u32)?;
     gpu_key.set_value("FeatureTestControl", &0x0000_9240u32)?;
 
-    // Memory, GTT & VRAM
     gpu_key.set_value("IncreaseFixedSegment", &1u32)?;
     gpu_key.set_value("ForceGTTCacheable", &1u32)?;
     gpu_key.set_value("DisableTiledMemory", &0u32)?;
@@ -68,7 +64,6 @@ pub fn apply_live_gpu_registry_flags(overdrive: bool) -> Result<()> {
     let static_vram: u32 = if is_haswell { 1_073_741_824 } else { 536_870_912 };
     gpu_key.set_value("TotalStaticVRAM", &static_vram)?;
 
-    // 1440p60 Media & Low-Latency Flip Pipeline
     gpu_key.set_value("Disable_OverlayDSQualityEnhancement", &1u32)?;
     gpu_key.set_value("DisableVideoPostProcessing", &1u32)?;
     gpu_key.set_value("SmoothVideo", &0u32)?;
@@ -86,7 +81,6 @@ pub fn apply_live_gpu_registry_flags(overdrive: bool) -> Result<()> {
         gpu_key.set_value("EnableHardwareScheduling", &1u32)?;
     }
 
-    // Unlock 512 MB Dedicated GMM Segment for Intel integrated graphics
     if let Ok((gmm_key, _)) = hklm.create_subkey(r"SOFTWARE\Intel\GMM") {
         let _ = gmm_key.set_value("DedicatedSegmentSize", &512u32);
     }
@@ -102,7 +96,6 @@ pub fn apply_win10_11_os_tweaks() -> Result<()> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
 
-    // 1. Spectre & Meltdown bypass + Lock kernel drivers (igdkmd64.sys) in physical RAM
     let (mm_key, _) = hklm.create_subkey(
         r"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management",
     )?;
@@ -111,21 +104,17 @@ pub fn apply_win10_11_os_tweaks() -> Result<()> {
     mm_key.set_value("DisablePagingExecutive", &1u32)?;
     mm_key.set_value("LargeSystemCache", &0u32)?;
 
-    // 2. Low-latency foreground quantum scheduling (Short, Variable, High Foreground Boost)
     let (prio_key, _) = hklm.create_subkey(r"SYSTEM\CurrentControlSet\Control\PriorityControl")?;
     prio_key.set_value("Win32PrioritySeparation", &0x26u32)?;
 
-    // 3. DXGKrnl TDR safety margin (prevents false GPU resets under heavy 1440p60/game spikes)
     let (gfx_drv, _) = hklm.create_subkey(r"SYSTEM\CurrentControlSet\Control\GraphicsDrivers")?;
     gfx_drv.set_value("TdrDelay", &10u32)?;
     gfx_drv.set_value("TdrDdiDelay", &10u32)?;
 
-    // 4. Disable DWM Multi-Plane Overlay (MPO) glitches on Win10/11
     let (dwm_key, _) = hklm.create_subkey(r"SOFTWARE\Microsoft\Windows\Dwm")?;
     dwm_key.set_value("OverlayTestMode", &5u32)?;
     dwm_key.set_value("OverlayMinFPS", &0u32)?;
 
-    // 5. MMCSS Maximum GPU Priority for Video Playback, Display Post-Processing & Games
     let (sys_prof, _) = hklm.create_subkey(
         r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile",
     )?;
@@ -148,29 +137,22 @@ pub fn apply_win10_11_os_tweaks() -> Result<()> {
         }
     }
 
-    // 6. Force Exclusive Fullscreen (FSE) & disable GameDVR capture overhead
     let (game_cfg, _) = hkcu.create_subkey(r"System\GameConfigStore")?;
     game_cfg.set_value("GameDVR_Enabled", &0u32)?;
     game_cfg.set_value("GameDVR_FSEBehaviorMode", &2u32)?;
     game_cfg.set_value("GameDVR_FSEBehavior", &2u32)?;
 
-    // 7. Cut DWM Transparency & UI animation overhead
     let (personalize, _) = hkcu.create_subkey(
         r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
     )?;
     personalize.set_value("EnableTransparency", &0u32)?;
 
-    // 8. Enable MSI Mode & High IRQ Priority across GPU, Storage, USB & Audio
     enable_msi_and_high_irq_priority(&hklm)?;
-
-    // 9. Power Plan: Unpark 100% cores, Aggressive Turbo, PCIe ASPM Off, Intel Graphics Max Perf
     apply_ultimate_power_plan();
 
-    // 10. Kernel Timer Coalescing: Disable Dynamic Tick & ensure fast TSC (no slow HPET)
     let _ = Command::new("bcdedit").args(["/set", "disabledynamictick", "yes"]).output();
     let _ = Command::new("bcdedit").args(["/deletevalue", "useplatformclock"]).output();
 
-    // 11. Stop & disable SysMain (Superfetch) disk thrashing
     let _ = Command::new("sc").args(["stop", "SysMain"]).output();
     let _ = Command::new("sc").args(["config", "SysMain", "start=", "disabled"]).output();
 
@@ -188,13 +170,11 @@ fn set_power_val(sub: &str, setting: &str, val: &str) {
 }
 
 fn apply_ultimate_power_plan() {
-    // PCI Express ASPM -> Off (0)
     set_power_val(
         "5012eeed-3c32-40de-8c5e-835a2d65777b",
         "ee12f906-d277-404b-b6da-e5fa1a576df5",
         "0",
     );
-    // Processor Min & Max State -> 100%
     set_power_val(
         "54533251-82be-4824-96c1-47b60b740d00",
         "893dee8e-2bef-41e0-89c6-b55d0929964c",
@@ -205,31 +185,26 @@ fn apply_ultimate_power_plan() {
         "bc5038f7-23e0-4960-96da-33abaf5935ec",
         "100",
     );
-    // Unpark 100% of CPU Cores (CPMINCORES = 100)
     set_power_val(
         "54533251-82be-4824-96c1-47b60b740d00",
         "0cc5b647-c1df-4637-891a-dec35c318583",
         "100",
     );
-    // Processor Performance Boost Mode -> Aggressive (2)
     set_power_val(
         "54533251-82be-4824-96c1-47b60b740d00",
         "be337238-0d82-4146-a960-4f3749d470c7",
         "2",
     );
-    // Energy Performance Preference -> 0 (Max Performance)
     set_power_val(
         "54533251-82be-4824-96c1-47b60b740d00",
         "36687f9e-e3a5-4dbf-b1dc-15eb381c50ef",
         "0",
     );
-    // Intel(R) Graphics Power Plan -> Maximum Performance (2)
     set_power_val(
         "44f3beca-a7c0-460e-9df2-bb8b99e0cba6",
         "3619c3f2-afb2-4afc-b0e9-e7fef372de36",
         "2",
     );
-    // USB Selective Suspend -> Disabled (0)
     set_power_val(
         "2a737441-1930-4402-8d77-b2bebba308a3",
         "48e6b7a6-50f5-4782-a5d4-53bb8f07e226",
@@ -259,7 +234,6 @@ fn enable_msi_and_high_irq_priority(hklm: &RegKey) -> Result<()> {
                         || svc_low.contains("hdaudbus");
 
                     if is_io_ctrl || is_ironlake_gpu || is_haswell_gpu {
-                        // Enable MSI on Haswell GPU + Storage/USB/Audio (keep Ironlake on line-based IRQ)
                         if is_io_ctrl || is_haswell_gpu {
                             let msi_path = format!(
                                 r"SYSTEM\CurrentControlSet\Enum\PCI\{}\{}\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties",

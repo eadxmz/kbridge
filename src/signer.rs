@@ -284,7 +284,6 @@ fn purge_stale_oem_packages() {
     }
 }
 
-/// Detects Intel Display Adapters across Ironlake (004x), Sandy/Ivy (01xx), and Haswell HD 4400/4600/5000 (04xx/0Axx/0Dxx).
 fn detect_intel_gpu_hardware_ids() -> Vec<String> {
     let mut hw_ids = Vec::new();
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
