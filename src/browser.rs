@@ -17,7 +17,7 @@ pub fn apply_firefox_1440p60_tweaks(is_haswell: bool) -> Result<()> {
 
     let dcomp_val = if is_haswell { "true" } else { "false" };
     let user_js_block = format!(
-        r#"// --- KBridge v0.6.0 1440p60 Hardware Video & Frame-Pacing Tweaks ---
+        r#"// --- KBridge v0.6.1 1440p60 Hardware Video & Frame-Pacing Tweaks ---
 user_pref("media.hardware-video-decoding.enabled", true);
 user_pref("media.hardware-video-decoding.force-enabled", true);
 user_pref("media.wmf.dxva.enabled", true);
@@ -42,7 +42,7 @@ user_pref("media.cache_resume_threshold", 90);
         if path.is_dir() && path.join("prefs.js").exists() {
             let target = path.join("user.js");
             let mut existing = fs::read_to_string(&target).unwrap_or_default();
-            if !existing.contains("KBridge v0.6.0 1440p60") {
+            if !existing.contains("KBridge v0.6.1 1440p60") {
                 if !existing.is_empty() && !existing.ends_with('\n') {
                     existing.push('\n');
                 }

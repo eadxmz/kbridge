@@ -34,9 +34,9 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.6.0-latest
-          name: "KBridge v0.6.0 Ultimate + HD 4400 Dual-GPU ZeroLag-X Frame Gen"
-          body: "v0.6.0 release: adds custom Dual-GPU Offload D3D11 2x Frame Generation locked exclusively to Intel HD Graphics 4400 (Pyramid Optical Flow, Ultra-Lite Lucas-Kanade PS 4.0, Adaptive Video Smoother) + custom ZeroLag-X Predictive Extrapolation with live mouse-delta camera vector injection and 1-frame waitable flip queue."
+          tag_name: v0.6.1-latest
+          name: "KBridge v0.6.1 Ultimate + HD 4400 Dual-GPU ZeroLag-X Frame Gen"
+          body: "v0.6.1 release: fixes windows 0.58.0 DXGI/GDI compilation errors, adds SetLayeredWindowAttributes alpha init for the click-through overlay, and includes Dual-GPU Offload D3D11 2x Frame Generation locked exclusively to Intel HD Graphics 4400 (ZeroLag-X Predictive Extrapolation, Pyramid Optical Flow, Ultra-Lite Lucas-Kanade PS 4.0, Adaptive Video Smoother)."
           prerelease: false
           files: |
             target/release/kbridge.exe

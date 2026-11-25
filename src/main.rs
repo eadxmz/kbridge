@@ -241,7 +241,7 @@ fn spawn_headless_daemon_now(exe_path: &Path, gamma: f32, contrast: f32) -> Resu
         .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
         .spawn()?;
 
-    println!("[+] KBridge v0.6.0 Guard is now running invisibly in the background (0 windows)!");
+    println!("[+] KBridge v0.6.1 Guard is now running invisibly in the background (0 windows)!");
     Ok(())
 }
 
@@ -329,7 +329,7 @@ fn main() -> Result<()> {
 
     loop {
         println!("\n======================================================================");
-        println!("  KBridge v0.6.0 ULTIMATE - Intel HD Graphics + ZeroLag-X Frame Gen");
+        println!("  KBridge v0.6.1 ULTIMATE - Intel HD Graphics + ZeroLag-X Frame Gen");
         println!("  Detected Active GPU: {}", gpu_label);
         println!("======================================================================");
         println!("  --- STEP 1: MULTI-GEN DRIVER PATCH & INSTALL ---");

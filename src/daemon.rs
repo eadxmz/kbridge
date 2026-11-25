@@ -320,7 +320,7 @@ pub fn run_daemon_loop(fallback_color: ColorConfig) {
 
     let (all_cores_mask, physical_core_mask) = compute_cpu_affinity_masks();
 
-    let hook_fg = unsafe {
+    let _hook_fg = unsafe {
         SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
             EVENT_SYSTEM_FOREGROUND,
@@ -332,7 +332,7 @@ pub fn run_daemon_loop(fallback_color: ColorConfig) {
         )
     };
 
-    let hook_focus = unsafe {
+    let _hook_focus = unsafe {
         SetWinEventHook(
             EVENT_OBJECT_FOCUS,
             EVENT_OBJECT_FOCUS,
@@ -386,11 +386,11 @@ pub fn run_daemon_loop(fallback_color: ColorConfig) {
 
     #[allow(unreachable_code)]
     unsafe {
-        if !hook_fg.is_null() {
-            UnhookWinEvent(hook_fg);
+        if !_hook_fg.is_null() {
+            UnhookWinEvent(_hook_fg);
         }
-        if !hook_focus.is_null() {
-            UnhookWinEvent(hook_focus);
+        if !_hook_focus.is_null() {
+            UnhookWinEvent(_hook_focus);
         }
     }
 }

@@ -219,7 +219,7 @@ pub fn patch_inf_for_win10_11(
         let is_sw_settings = current_section == "igfx_softwaredevicesettings"
             || current_section.ends_with("_softwaredevicesettings");
         if is_sw_settings && !injected_dwords {
-            out_lines.push("; --- KBridge v0.6.0 Ultimate Performance & 1440p60 Media Flags ---".to_string());
+            out_lines.push("; --- KBridge v0.6.1 Ultimate Performance & 1440p60 Media Flags ---".to_string());
             for (key, val) in HARDCODED_INF_DWORDS_COMMON {
                 out_lines.push(format!("HKR,,\"{}\",%REG_DWORD%,0x{:08X}", key, val));
             }

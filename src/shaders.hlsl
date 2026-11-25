@@ -1,5 +1,5 @@
 // ============================================================================
-// KBridge v0.6.0 — Intel HD Graphics 4400 Dual-GPU Offload Frame Gen Shaders
+// KBridge v0.6.1 — Intel HD Graphics 4400 Dual-GPU Offload Frame Gen Shaders
 // Modes:
 //   1. Pyramid Optical Flow (2-level Coarse 1/8 -> Fine 1/4 Block Matching + Smooth)
 //   2. Ultra-Lite Lucas-Kanade (Single-pass PS 4.0 Gradient Optical Flow)
@@ -56,14 +56,12 @@ float2 PS_PyramidCoarse(VSOut i) : SV_TARGET {
     float bestCost = 1e9;
     float2 stepUv = flowTexelSize;
 
-    // 5x5 search window in coarse 1/8 space covers +/- 16 full-res pixels
     [unroll]
     for (int dy = -2; dy <= 2; dy++) {
         [unroll]
         for (int dx = -2; dx <= 2; dx++) {
             float2 candMv = float2(dx, dy) * stepUv;
             float cost = 0.0;
-            // 3x3 patch SAD
             [unroll]
             for (int py = -1; py <= 1; py++) {
                 [unroll]
@@ -74,7 +72,6 @@ float2 PS_PyramidCoarse(VSOut i) : SV_TARGET {
                     cost += abs(lCurr - lPrev);
                 }
             }
-            // Tiny zero-motion preference to stabilize flat skies & static HUDs
             cost += length(candMv) * 0.15;
             if (cost < bestCost) {
                 bestCost = cost;
@@ -168,7 +165,6 @@ float2 PS_LucasKanade(VSOut i) : SV_TARGET {
         }
     }
 
-    // Tikhonov regularization for numerical stability on flat regions
     float eps = 0.0025;
     float a = sIx2 + eps;
     float d = sIy2 + eps;
@@ -182,7 +178,6 @@ float2 PS_LucasKanade(VSOut i) : SV_TARGET {
         mv *= s * 1.5;
     }
 
-    // Clamp max displacement so noisy gradients never explode
     float maxLen = (mode > 1.5) ? 0.025 : 0.045;
     float len = length(mv);
     if (len > maxLen) {
@@ -202,12 +197,10 @@ float4 PS_Synthesize(VSOut i) : SV_TARGET {
     float3 rawPrev = texPrev.Sample(samLin, i.uv).rgb;
     float staticDiff = abs(Luma(rawCurr) - Luma(rawPrev));
 
-    // Static HUD / Crosshair / Subtitle Lock: if pixel didn't change between frames, keep razor-sharp
     if (staticDiff < hudThreshold && length(mouseBiasUv) < 0.0005) {
         return float4(rawCurr, 1.0);
     }
 
-    // Video Smoother Scene-Cut Protection: snap cleanly on hard cuts so zero ghosting occurs
     if (mode > 1.5 && staticDiff > sceneCutThresh) {
         return float4(rawCurr, 1.0);
     }
@@ -215,26 +208,20 @@ float4 PS_Synthesize(VSOut i) : SV_TARGET {
     float2 mv = texFlow.Sample(samLin, i.uv).rg;
 
     if (zeroLagExtrap > 0.5) {
-        // --- KBridge ZeroLag-X: Forward Predictive Extrapolation (0-Frame Hold) ---
-        // Blend optical flow MV with live mouse-delta camera-pan vector (only on non-static pixels)
         float hudProtect = smoothstep(hudThreshold, hudThreshold * 3.0, staticDiff);
         float2 predMv = mv + mouseBiasUv * hudProtect;
 
-        // Warp Frame[N] forward by +alpha * predMv
         float2 uvFwd = saturate(i.uv - predMv * alpha);
         float3 warpedCurr = texCurr.Sample(samLin, uvFwd).rgb;
 
-        // Disocclusion & divergence check: verify warped sample matches motion consistency
         float2 uvBackCheck = saturate(i.uv - predMv * (1.0 + alpha));
         float3 backPrev = texPrev.Sample(samLin, uvBackCheck).rgb;
         float consistencyErr = abs(Luma(warpedCurr) - Luma(backPrev));
 
-        // High error = disoccluded edge -> smoothly fall back to rawCurr to prevent stretching
         float disoccFallback = smoothstep(0.08, 0.28, consistencyErr);
         float3 outRgb = lerp(warpedCurr, rawCurr, disoccFallback * 0.75);
         return float4(outRgb, 1.0);
     } else {
-        // --- Classic Bidirectional Interpolation (t = alpha between Prev and Curr) ---
         float2 uvPrev = saturate(i.uv + mv * alpha);
         float2 uvCurr = saturate(i.uv - mv * (1.0 - alpha));
         float3 cPrev = texPrev.Sample(samLin, uvPrev).rgb;
@@ -243,7 +230,6 @@ float4 PS_Synthesize(VSOut i) : SV_TARGET {
         float mismatch = abs(Luma(cPrev) - Luma(cCurr));
         float3 blended = lerp(cPrev, cCurr, alpha);
 
-        // Disocclusion fallback: if forward & backward warps disagree strongly, favor cCurr
         float fall = smoothstep(0.12, 0.35, mismatch);
         float3 outRgb = lerp(blended, rawCurr, fall * 0.65);
         return float4(outRgb, 1.0);

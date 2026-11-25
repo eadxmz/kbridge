@@ -6,7 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use windows::core::{Interface, PCSTR, PCWSTR};
-use windows::Win32::Foundation::{HANDLE, HMODULE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HANDLE, HMODULE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Direct3D::Fxc::{D3DCompile, D3DCOMPILE_OPTIMIZATION_LEVEL3};
 use windows::Win32::Graphics::Direct3D::{
     ID3DBlob, ID3DInclude, D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0,
@@ -22,13 +22,13 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_VIEWPORT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16_FLOAT,
-    DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16_FLOAT,
+    DXGI_FORMAT_R16_FLOAT, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, IDXGIAdapter, IDXGIAdapter1, IDXGIFactory2, IDXGIOutput1,
     IDXGIOutputDuplication, IDXGIResource, IDXGISwapChain1, IDXGISwapChain2,
-    DXGI_ALPHA_MODE_IGNORE, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, DXGI_SCALING_STRETCH,
+    DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, DXGI_PRESENT, DXGI_SCALING_STRETCH,
     DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
     DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
@@ -37,10 +37,11 @@ use windows::Win32::System::Threading::WaitForSingleObjectEx;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos,
-    GetSystemMetrics, PeekMessageW, RegisterClassW, SetWindowDisplayAffinity, ShowWindow,
-    TranslateMessage, CS_HREDRAW, CS_VREDRAW, MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE,
-    SW_SHOWNOACTIVATE, WDA_EXCLUDEFROMCAPTURE, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    GetSystemMetrics, PeekMessageW, RegisterClassW, SetLayeredWindowAttributes,
+    SetWindowDisplayAffinity, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, LWA_ALPHA, MSG,
+    PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOWNOACTIVATE, WDA_EXCLUDEFROMCAPTURE,
+    WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    WS_POPUP,
 };
 
 use crate::daemon::lock_kernel_timer_05ms;
@@ -78,8 +79,6 @@ struct RenderTargetTex {
     tex: ID3D11Texture2D,
     srv: ID3D11ShaderResourceView,
     rtv: ID3D11RenderTargetView,
-    width: u32,
-    height: u32,
 }
 
 static OVERLAY_ACTIVE: AtomicBool = AtomicBool::new(true);
@@ -214,8 +213,6 @@ fn create_rt_texture(
         tex,
         srv: srv.unwrap(),
         rtv: rtv.unwrap(),
-        width: desc.Width,
-        height: desc.Height,
     })
 }
 
@@ -254,7 +251,9 @@ fn create_overlay_window(width: i32, height: i32) -> Result<HWND> {
             None,
         )?;
 
-        // CRITICAL: Exclude our own overlay from DXGI Desktop Duplication so zero feedback loop occurs
+        // Make the WS_EX_LAYERED click-through overlay opaque (alpha = 255) so DXGI flip frames display
+        SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
+        // Exclude our own overlay from DXGI Desktop Duplication so zero feedback loop occurs
         SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)?;
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         Ok(hwnd)
@@ -290,7 +289,6 @@ fn run_pass(
         ctx.PSSetShaderResources(0, Some(srvs));
         ctx.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx.Draw(3, 0);
-        // Unbind SRVs so textures can be reused as RTVs cleanly next pass without D3D11 hazard warnings
         let nulls: [Option<ID3D11ShaderResourceView>; 3] = [None, None, None];
         ctx.PSSetShaderResources(0, Some(&nulls));
     }
@@ -360,7 +358,6 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
     let device = device.unwrap();
     let ctx = context.unwrap();
 
-    // Acquire DXGI Desktop Duplication on Output 0 wired to Intel HD 4400
     let output0 = unsafe {
         adapter1
             .EnumOutputs(0)
@@ -377,7 +374,6 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
     let height = unsafe { GetSystemMetrics(SM_CYSCREEN) } as u32;
     let hwnd = create_overlay_window(width as i32, height as i32)?;
 
-    // Waitable 1-Frame Flip-Discard SwapChain for absolute minimum presentation latency
     let swap_desc = DXGI_SWAP_CHAIN_DESC1 {
         Width: width,
         Height: height,
@@ -407,7 +403,6 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
     unsafe { device.CreateRenderTargetView(&back_buffer, None, Some(&mut back_rtv))? };
     let back_rtv = back_rtv.unwrap();
 
-    // Compile HLSL Shaders on Intel HD 4400 (SM 4.0 / 5.0)
     println!("[*] Compiling KBridge HLSL Optical Flow & ZeroLag-X Synthesis shaders...");
     let vs_bytes = compile_shader("VS_Fullscreen", "vs_4_0")?;
     let ps_luma_b = compile_shader("PS_LumaDownsample", "ps_4_0")?;
@@ -446,7 +441,6 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
     let ps_pass = ps_pass.unwrap();
     let ps_synth = ps_synth.unwrap();
 
-    // Linear clamp sampler & Constant Buffer
     let samp_desc = D3D11_SAMPLER_DESC {
         Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
         AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
@@ -473,7 +467,6 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
     unsafe { device.CreateBuffer(&cb_desc, None, Some(&mut cb))? };
     let cb = cb.unwrap();
 
-    // Allocate Full-Res Ring Buffers + 1/4 & 1/8 Pyramid Buffers in HD 4400 VRAM
     let w4 = (width / 4).max(16);
     let h4 = (height / 4).max(16);
     let w8 = (width / 8).max(8);
@@ -498,7 +491,7 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
 
     let mut has_prev = false;
     let mut last_real_time = Instant::now();
-    let mut avg_frame_dt_ms: f64 = 33.33; // Default 30fps base estimate
+    let mut avg_frame_dt_ms: f64 = 33.33;
     let mut last_toggle_time = Instant::now() - Duration::from_secs(1);
 
     let mut cb_data = FrameGenCBuffer {
@@ -514,7 +507,6 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
     };
 
     loop {
-        // Pump overlay window messages
         unsafe {
             let mut msg: MSG = zeroed();
             while PeekMessageW(&mut msg, hwnd, 0, 0, PM_REMOVE).as_bool() {
@@ -523,13 +515,11 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
             }
         }
 
-        // Hotkey: Ctrl + Alt + Q -> Exit
         if is_hotkey_pressed(b'Q' as i32) {
             println!("[*] Stopping HD 4400 Frame Gen...");
             break;
         }
 
-        // Hotkey: Ctrl + Alt + F -> Toggle Overlay
         if is_hotkey_pressed(b'F' as i32) && last_toggle_time.elapsed() > Duration::from_millis(400) {
             let now_on = !OVERLAY_ACTIVE.load(Ordering::SeqCst);
             OVERLAY_ACTIVE.store(now_on, Ordering::SeqCst);
@@ -545,7 +535,6 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
             continue;
         }
 
-        // 1. Capture next real frame from DXGI Desktop Duplication on Intel HD 4400
         let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut desktop_res: Option<IDXGIResource> = None;
         let acq = unsafe { duplication.AcquireNextFrame(16, &mut frame_info, &mut desktop_res) };
@@ -564,7 +553,6 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
                 if let Some(res) = desktop_res {
                     let src_tex: ID3D11Texture2D = res.cast()?;
                     unsafe {
-                        // Shift previous -> prev, copy fresh -> curr
                         if has_prev {
                             ctx.CopyResource(&full_prev.tex, &full_curr.tex);
                             ctx.CopyResource(&luma4_prev.tex, &luma4_curr.tex);
@@ -575,7 +563,6 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
                 }
                 let _ = unsafe { duplication.ReleaseFrame() };
 
-                // Downsample fresh frame to 1/4 and 1/8 Luma
                 update_cb(&ctx, &cb, &cb_data);
                 run_pass(
                     &ctx,
@@ -607,7 +594,6 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
                     continue;
                 }
 
-                // 2. If ZeroLag-X Extrapolation: present REAL Frame[N] IMMEDIATELY (0-Frame Hold!)
                 if matches!(latency, LatencyMode::ZeroLagExtrapolation) {
                     unsafe {
                         WaitForSingleObjectEx(waitable_obj, 50, false);
@@ -623,10 +609,9 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
                         width,
                         height,
                     );
-                    let _ = unsafe { swap_chain1.Present(0, 0) };
+                    let _ = unsafe { swap_chain1.Present(0, DXGI_PRESENT(0)) };
                 }
 
-                // 3. Run Optical Flow on Intel HD 4400
                 let final_flow_srv = match mode {
                     FrameGenMode::PyramidOpticalFlow => {
                         cb_data.flow_texel_size = [1.0 / w8 as f32, 1.0 / h8 as f32];
@@ -692,7 +677,6 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
                     }
                 };
 
-                // 4. JIT Half-Period Pacing + Live Mouse-Delta Camera-Vector Injection (ZeroLag-X)
                 let half_period = Duration::from_secs_f64((avg_frame_dt_ms * 0.48) / 1000.0);
                 let target_gen_time = capture_time + half_period;
 
@@ -708,7 +692,6 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
 
                 update_cb(&ctx, &cb, &cb_data);
 
-                // Synthesize and present Generated Frame
                 unsafe {
                     WaitForSingleObjectEx(waitable_obj, 50, false);
                 }
@@ -727,9 +710,8 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
                     width,
                     height,
                 );
-                let _ = unsafe { swap_chain1.Present(0, 0) };
+                let _ = unsafe { swap_chain1.Present(0, DXGI_PRESENT(0)) };
 
-                // If Classic Interpolation: wait half-period and then present Real Frame[N]
                 if matches!(latency, LatencyMode::ClassicInterpolation) {
                     high_precision_wait(target_gen_time);
                     unsafe {
@@ -746,12 +728,10 @@ pub fn run_hd4400_framegen(mode: FrameGenMode, latency: LatencyMode) -> Result<(
                         width,
                         height,
                     );
-                    let _ = unsafe { swap_chain1.Present(0, 0) };
+                    let _ = unsafe { swap_chain1.Present(0, DXGI_PRESENT(0)) };
                 }
             }
-            Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => {
-                // Static desktop/video pause: no new frame from dGPU yet
-            }
+            Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => {}
             Err(e) => {
                 println!("[!] DXGI Desktop Duplication lost ({}), exiting Frame Gen.", e);
                 break;
